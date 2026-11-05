@@ -1,0 +1,10 @@
+build/
+*.o
+*.d
+/mini-redis
+/tests/bin/
+/data/
+*.aof
+.vscode/
+__pycache__/
+.venv/

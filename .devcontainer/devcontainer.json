@@ -1,0 +1,9 @@
+{
+  "name": "jungle-team11-mini-redis",
+  "build": { "dockerfile": "Dockerfile" },
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-vscode.cpptools", "ms-vscode.makefile-tools"]
+    }
+  }
+}

@@ -10,21 +10,21 @@
 
 static int test_passed = 0;
 
-#define CHECK(expr)                                                        \
-    do {                                                                   \
-        if (!(expr)) {                                                     \
+#define CHECK(expr)                                                           \
+    do {                                                                      \
+        if (!(expr)) {                                                        \
             fprintf(stderr, "  FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-            exit(1);                                                       \
-        }                                                                  \
-        test_passed++;                                                     \
+            exit(1);                                                          \
+        }                                                                     \
+        test_passed++;                                                        \
     } while (0)
 
 #define CHECK_STR_EQ(a, b) CHECK(strcmp((a), (b)) == 0)
 
-#define RUN(test_fn)                         \
-    do {                                     \
-        printf("  %s\n", #test_fn);          \
-        test_fn();                           \
+#define RUN(test_fn)                \
+    do {                            \
+        printf("  %s\n", #test_fn); \
+        test_fn();                  \
     } while (0)
 
 #define TEST_DONE() printf("  ok (%d checks)\n", test_passed)

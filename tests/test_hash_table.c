@@ -14,6 +14,9 @@ enum {
     COLLIDING_KEY_COUNT = 4,
     COLLISION_SEARCH_LIMIT = 10000,
     RANDOM_TRIAL_COUNT = 1000,
+    BIG_KEY_COUNT = 100000,
+    KEPT_KEY_COUNT = 10,
+    CHURN_KEY_COUNT = 1000,
 };
 
 /* FNV-1a 64bit 공개 테스트 벡터 */
@@ -27,6 +30,48 @@ static struct str *create_from_text(const char *text)
 }
 
 static int g_destroyed_count = 0;
+
+static struct str *create_numbered_key(int number)
+{
+    char buf[KEY_BUF_BYTES];
+    int len = snprintf(buf, sizeof(buf), "key:%d", number);
+    return str_create(buf, (size_t)len);
+}
+
+/* key:0 ~ key:(count-1) 를 모두 value 로 저장한다 */
+static void set_numbered_keys(struct hash_table *ht, int count, void *value)
+{
+    for (int i = 0; i < count; i++) {
+        hash_table_set(ht, create_numbered_key(i), value);
+    }
+}
+
+/* key:first ~ key:(last-1) 를 모두 지운다 */
+static void delete_numbered_keys(struct hash_table *ht, int first, int last)
+{
+    for (int i = first; i < last; i++) {
+        struct str *lookup = create_numbered_key(i);
+        hash_table_delete(ht, lookup);
+        str_destroy(lookup);
+    }
+}
+
+/* key:first ~ key:(last-1) 가 모두 조회되면 true */
+static bool is_all_numbered_found(const struct hash_table *ht, int first, int last)
+{
+    bool is_all_found = true;
+    for (int i = first; i < last; i++) {
+        struct str *lookup = create_numbered_key(i);
+        is_all_found = is_all_found && hash_table_find(ht, lookup) != NULL;
+        str_destroy(lookup);
+    }
+    return is_all_found;
+}
+
+static bool is_power_of_two(size_t n)
+{
+    return n != 0 && (n & (n - 1)) == 0;
+}
 
 static void ignore_value(void *value)
 {
@@ -591,6 +636,85 @@ static void test_random_entry_reaches_entries_in_different_buckets(void)
     hash_table_destroy(ht);
 }
 
+static void test_set_beyond_initial_size_doubles_buckets(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    set_numbered_keys(ht, HT_INITIAL_SIZE, &value);
+    CHECK(hash_table_bucket_count(ht) == HT_INITIAL_SIZE);
+    hash_table_set(ht, create_from_text("one-more"), &value);
+    CHECK(hash_table_bucket_count(ht) == (size_t)HT_INITIAL_SIZE * 2);
+    hash_table_destroy(ht);
+}
+
+static void test_grow_keeps_all_keys_findable(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    set_numbered_keys(ht, BIG_KEY_COUNT, &value);
+    CHECK(hash_table_count(ht) == BIG_KEY_COUNT);
+    CHECK(is_all_numbered_found(ht, 0, BIG_KEY_COUNT));
+    hash_table_destroy(ht);
+}
+
+static void test_grow_keeps_load_factor_at_most_one(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    set_numbered_keys(ht, BIG_KEY_COUNT, &value);
+    CHECK(hash_table_count(ht) <= hash_table_bucket_count(ht));
+    CHECK(is_power_of_two(hash_table_bucket_count(ht)));
+    hash_table_destroy(ht);
+}
+
+static void test_delete_most_keys_shrinks_buckets(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    set_numbered_keys(ht, BIG_KEY_COUNT, &value);
+    size_t peak_bucket_count = hash_table_bucket_count(ht);
+    delete_numbered_keys(ht, KEPT_KEY_COUNT, BIG_KEY_COUNT);
+    size_t bucket_count = hash_table_bucket_count(ht);
+    CHECK(bucket_count < peak_bucket_count);
+    CHECK(bucket_count >= HT_INITIAL_SIZE);
+    CHECK(is_power_of_two(bucket_count));
+    CHECK(is_all_numbered_found(ht, 0, KEPT_KEY_COUNT));
+    hash_table_destroy(ht);
+}
+
+static void test_delete_all_keys_returns_to_initial_size(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    set_numbered_keys(ht, BIG_KEY_COUNT, &value);
+    delete_numbered_keys(ht, 0, BIG_KEY_COUNT);
+    CHECK(hash_table_count(ht) == 0);
+    CHECK(hash_table_bucket_count(ht) == HT_INITIAL_SIZE);
+    hash_table_destroy(ht);
+}
+
+static void test_delete_at_initial_size_does_not_shrink(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    set_numbered_keys(ht, 1, &value);
+    delete_numbered_keys(ht, 0, 1);
+    CHECK(hash_table_bucket_count(ht) == HT_INITIAL_SIZE);
+    hash_table_destroy(ht);
+}
+
+static void test_grow_and_shrink_does_not_leak(void)
+{
+    size_t before_bytes = mem_used_bytes();
+    struct hash_table *ht = hash_table_create(destroy_str_value);
+    for (int i = 0; i < CHURN_KEY_COUNT; i++) {
+        hash_table_set(ht, create_numbered_key(i), create_from_text("value"));
+    }
+    delete_numbered_keys(ht, 0, CHURN_KEY_COUNT);
+    hash_table_destroy(ht);
+    CHECK(mem_used_bytes() == before_bytes);
+}
+
 static void run_create_tests(void)
 {
     RUN(test_create_returns_zero_count);
@@ -652,6 +776,17 @@ static void run_random_entry_tests(void)
     RUN(test_random_entry_reaches_entries_in_different_buckets);
 }
 
+static void run_resize_tests(void)
+{
+    RUN(test_set_beyond_initial_size_doubles_buckets);
+    RUN(test_grow_keeps_all_keys_findable);
+    RUN(test_grow_keeps_load_factor_at_most_one);
+    RUN(test_delete_most_keys_shrinks_buckets);
+    RUN(test_delete_all_keys_returns_to_initial_size);
+    RUN(test_delete_at_initial_size_does_not_shrink);
+    RUN(test_grow_and_shrink_does_not_leak);
+}
+
 int main(void)
 {
     run_create_tests();
@@ -659,6 +794,7 @@ int main(void)
     run_set_find_tests();
     run_delete_tests();
     run_random_entry_tests();
+    run_resize_tests();
     TEST_DONE();
     return 0;
 }

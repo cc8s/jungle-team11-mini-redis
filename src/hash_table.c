@@ -1,5 +1,6 @@
 #include "hash_table.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 
 #include "mem.h"
@@ -7,7 +8,13 @@
 static const uint64_t FNV_OFFSET_BASIS = 0xcbf29ce484222325ULL;
 static const uint64_t FNV_PRIME = 0x100000001b3ULL;
 
-/* 불변식: bucket_count 는 2의 거듭제곱이고, entry_count 는 모든 체인의 노드 수와 같다 */
+enum {
+    SHRINK_FILL_PERCENT = 10,
+    PERCENT_SCALE = 100,
+};
+
+/* 불변식: bucket_count 는 2의 거듭제곱이고, entry_count 는 모든 체인의 노드 수와 같다.
+ * 늘리기가 실패하지 않는 한 entry_count <= bucket_count (load factor 1.0 이하) 를 유지한다 */
 struct hash_table {
     struct ht_entry **buckets;
     size_t bucket_count;
@@ -18,6 +25,11 @@ struct hash_table {
 static struct ht_entry **alloc_buckets(size_t bucket_count);
 static void destroy_chain(const struct hash_table *ht, struct ht_entry *entry);
 static inline size_t bucket_index(const struct hash_table *ht, uint64_t hash);
+static inline size_t index_for(uint64_t hash, size_t bucket_count);
+static void grow_if_needed(struct hash_table *ht);
+static void shrink_if_needed(struct hash_table *ht);
+static void resize(struct hash_table *ht, size_t new_bucket_count);
+static void move_chain(struct ht_entry *entry, struct ht_entry **new_buckets, size_t new_count);
 static struct ht_entry *find_in_chain(struct ht_entry *entry, const struct str *key);
 static void replace_value(const struct hash_table *ht, struct ht_entry *entry, void *value);
 static void destroy_value(const struct hash_table *ht, void *value);
@@ -73,6 +85,7 @@ enum ht_result hash_table_set(struct hash_table *ht, struct str *key, void *valu
     entry->next = ht->buckets[idx];
     ht->buckets[idx] = entry;
     ht->entry_count++;
+    grow_if_needed(ht);
     return HT_OK;
 }
 
@@ -96,6 +109,7 @@ enum ht_result hash_table_delete(struct hash_table *ht, const struct str *key)
     *link = entry->next;
     destroy_entry(ht, entry);
     ht->entry_count--;
+    shrink_if_needed(ht);
     return HT_OK;
 }
 
@@ -158,7 +172,53 @@ static void destroy_chain(const struct hash_table *ht, struct ht_entry *entry)
 /* bucket_count 가 2의 거듭제곱이라 나머지 연산 대신 하위 비트 마스크로 칸을 고른다 */
 static inline size_t bucket_index(const struct hash_table *ht, uint64_t hash)
 {
-    return (size_t)(hash & (ht->bucket_count - 1));
+    return index_for(hash, ht->bucket_count);
+}
+
+static inline size_t index_for(uint64_t hash, size_t bucket_count)
+{
+    return (size_t)(hash & (bucket_count - 1));
+}
+
+static void grow_if_needed(struct hash_table *ht)
+{
+    if (ht->entry_count > ht->bucket_count && ht->bucket_count <= SIZE_MAX / 2) {
+        resize(ht, ht->bucket_count * 2);
+    }
+}
+
+static void shrink_if_needed(struct hash_table *ht)
+{
+    bool is_sparse = ht->entry_count * PERCENT_SCALE < ht->bucket_count * SHRINK_FILL_PERCENT;
+    if (is_sparse && ht->bucket_count > HT_INITIAL_SIZE) {
+        resize(ht, ht->bucket_count / 2);
+    }
+}
+
+/* 새 버킷 할당이 실패하면 크기를 그대로 둔다. 느려질 뿐 데이터는 잃지 않는다 */
+static void resize(struct hash_table *ht, size_t new_bucket_count)
+{
+    struct ht_entry **new_buckets = alloc_buckets(new_bucket_count);
+    if (new_buckets == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < ht->bucket_count; i++) {
+        move_chain(ht->buckets[i], new_buckets, new_bucket_count);
+    }
+    mem_free(ht->buckets);
+    ht->buckets = new_buckets;
+    ht->bucket_count = new_bucket_count;
+}
+
+static void move_chain(struct ht_entry *entry, struct ht_entry **new_buckets, size_t new_count)
+{
+    while (entry != NULL) {
+        struct ht_entry *next = entry->next;
+        size_t idx = index_for(hash_table_hash(entry->key), new_count);
+        entry->next = new_buckets[idx];
+        new_buckets[idx] = entry;
+        entry = next;
+    }
 }
 
 static struct ht_entry *find_in_chain(struct ht_entry *entry, const struct str *key)

@@ -1,8 +1,9 @@
 #include "str.h"
 
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
+
+#include "mem.h"
 
 struct str *str_create(const char *data, size_t len)
 {
@@ -13,7 +14,7 @@ struct str *str_create(const char *data, size_t len)
         return NULL;
     }
 
-    struct str *s = malloc(sizeof(*s) + len + 1);
+    struct str *s = mem_alloc(sizeof(*s) + len + 1);
     if (s == NULL) {
         return NULL;
     }
@@ -32,7 +33,7 @@ struct str *str_dup(const struct str *src)
 
 void str_destroy(struct str *s)
 {
-    free(s);
+    mem_free(s);
 }
 
 bool str_equal(const struct str *a, const struct str *b)

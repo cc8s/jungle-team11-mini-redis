@@ -1,5 +1,6 @@
 #include <stdint.h>
 
+#include "mem.h"
 #include "str.h"
 #include "test.h"
 
@@ -132,6 +133,24 @@ static void test_equal_empty_strings_returns_true(void)
     str_destroy(b);
 }
 
+static void test_create_adds_header_and_bytes_to_used_bytes(void)
+{
+    size_t before_bytes = mem_used_bytes();
+    struct str *s = create_from_text("hello");
+    CHECK(mem_used_bytes() == before_bytes + sizeof(*s) + s->len + 1);
+    str_destroy(s);
+}
+
+static void test_destroy_returns_used_bytes_to_baseline(void)
+{
+    size_t before_bytes = mem_used_bytes();
+    struct str *s = create_from_text("hello");
+    struct str *copy = str_dup(s);
+    str_destroy(s);
+    str_destroy(copy);
+    CHECK(mem_used_bytes() == before_bytes);
+}
+
 int main(void)
 {
     RUN(test_create_copies_bytes_and_length);
@@ -148,6 +167,8 @@ int main(void)
     RUN(test_equal_different_bytes_returns_false);
     RUN(test_equal_differs_after_nul_returns_false);
     RUN(test_equal_empty_strings_returns_true);
+    RUN(test_create_adds_header_and_bytes_to_used_bytes);
+    RUN(test_destroy_returns_used_bytes_to_baseline);
     TEST_DONE();
     return 0;
 }

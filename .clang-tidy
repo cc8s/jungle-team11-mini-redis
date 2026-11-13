@@ -1,10 +1,13 @@
 # 규칙 설명: docs/STYLE_GUIDE.md
 # 실행: clang-tidy src/*.c -- -std=c11 -D_GNU_SOURCE -Isrc
+# 가이드 5장은 길이를 받는 memcpy / snprintf 를 쓰라고 하므로,
+# memcpy_s 를 요구하는 insecureAPI.DeprecatedOrUnsafeBufferHandling 검사는 끈다.
 Checks: >
   -*,
   bugprone-*,
   -bugprone-easily-swappable-parameters,
   clang-analyzer-*,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
   misc-unused-parameters,
   readability-braces-around-statements,
   readability-identifier-naming,

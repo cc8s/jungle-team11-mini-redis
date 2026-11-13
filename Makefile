@@ -1,6 +1,9 @@
 CC      := gcc
-CFLAGS  := -std=c11 -Wall -Wextra -g -O2 -pthread -D_GNU_SOURCE -Isrc
-LDFLAGS := -pthread
+CFLAGS  := -std=c11 -Wall -Wextra -g -O2 -pthread -D_GNU_SOURCE -Isrc $(EXTRA_CFLAGS)
+LDFLAGS := -pthread $(EXTRA_LDFLAGS)
+
+# 메모리 오류(AddressSanitizer)와 정의되지 않은 동작(UBSan)을 잡는다. 하나라도 걸리면 실패
+SAN := -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
 
 BIN      := mini-redis
 SRCS     := $(wildcard src/*.c)
@@ -8,7 +11,7 @@ LIB_SRCS := $(filter-out src/main.c, $(SRCS))
 LIB_OBJS := $(patsubst src/%.c, build/%.o, $(LIB_SRCS))
 TESTS    := $(patsubst tests/%.c, tests/bin/%, $(wildcard tests/test_*.c))
 
-.PHONY: all test run clean
+.PHONY: all test asan run clean
 
 all: $(BIN)
 
@@ -27,6 +30,10 @@ tests/bin/%: tests/%.c $(LIB_OBJS) | tests/bin
 # 테스트 실행 파일을 하나씩 돌리고, 하나라도 실패하면 make 가 실패한다
 test: $(TESTS)
 	@for t in $(TESTS); do echo "== $$t"; ./$$t || exit 1; done
+
+asan:
+	$(MAKE) clean
+	$(MAKE) test EXTRA_CFLAGS="$(SAN)" EXTRA_LDFLAGS="$(SAN)"
 
 run: $(BIN)
 	./$(BIN)

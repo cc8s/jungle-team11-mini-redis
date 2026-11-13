@@ -1,0 +1,73 @@
+#include "hash_table.h"
+
+#include "mem.h"
+
+/* 불변식: bucket_count 는 2의 거듭제곱이고, entry_count 는 모든 체인의 노드 수와 같다 */
+struct hash_table {
+    struct ht_entry **buckets;
+    size_t bucket_count;
+    size_t entry_count;
+    ht_value_destroy_fn *value_destroy;
+};
+
+static struct ht_entry **alloc_buckets(size_t bucket_count);
+static void destroy_chain(const struct hash_table *ht, struct ht_entry *entry);
+
+struct hash_table *hash_table_create(ht_value_destroy_fn *value_destroy)
+{
+    struct hash_table *ht = mem_alloc(sizeof(*ht));
+    if (ht == NULL) {
+        return NULL;
+    }
+    ht->buckets = alloc_buckets(HT_INITIAL_SIZE);
+    if (ht->buckets == NULL) {
+        mem_free(ht);
+        return NULL;
+    }
+    ht->bucket_count = HT_INITIAL_SIZE;
+    ht->entry_count = 0;
+    ht->value_destroy = value_destroy;
+    return ht;
+}
+
+void hash_table_destroy(struct hash_table *ht)
+{
+    if (ht == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < ht->bucket_count; i++) {
+        destroy_chain(ht, ht->buckets[i]);
+    }
+    mem_free(ht->buckets);
+    mem_free(ht);
+}
+
+size_t hash_table_count(const struct hash_table *ht)
+{
+    return ht->entry_count;
+}
+
+size_t hash_table_bucket_count(const struct hash_table *ht)
+{
+    return ht->bucket_count;
+}
+
+/* 버킷은 체인 머리 포인터의 배열이라 포인터 크기로 할당하는 것이 맞다 */
+static struct ht_entry **alloc_buckets(size_t bucket_count)
+{
+    /* NOLINTNEXTLINE(bugprone-sizeof-expression) */
+    return mem_calloc(bucket_count, sizeof(struct ht_entry *));
+}
+
+static void destroy_chain(const struct hash_table *ht, struct ht_entry *entry)
+{
+    while (entry != NULL) {
+        struct ht_entry *next = entry->next;
+        str_destroy(entry->key);
+        if (ht->value_destroy != NULL) {
+            ht->value_destroy(entry->value);
+        }
+        mem_free(entry);
+        entry = next;
+    }
+}

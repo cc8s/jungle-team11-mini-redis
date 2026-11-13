@@ -9,12 +9,14 @@
 enum {
     HT_INITIAL_SIZE = 16,
     HT_RANDOM_MAX_PROBES = 100,
+    HT_SEED_BYTES = 16,
 };
 
 enum ht_result {
     HT_OK = 0,
     HT_NOT_FOUND,
     HT_OUT_OF_MEMORY,
+    HT_IO_ERROR,
 };
 
 /* 테이블이 값을 해제할 때 부르는 함수. 값을 해제하지 않으려면 NULL 을 넘긴다. */
@@ -53,7 +55,13 @@ size_t hash_table_count(const struct hash_table *ht);
 /* 버킷 배열의 크기를 반환한다. */
 size_t hash_table_bucket_count(const struct hash_table *ht);
 
-/* 키의 모든 바이트로 64bit 해시를 계산한다. 같은 키는 항상 같은 값이다. */
+/* 키의 모든 바이트로 seed 를 넣은 SipHash-2-4 를 계산한다. 같은 seed 면 같은 값이다. */
 uint64_t hash_table_hash(const struct str *key);
+
+/* 해시 seed 를 바꾼다. 기존 테이블의 칸이 어긋나므로 테이블을 만들기 전에만 부른다. */
+void hash_table_set_seed(const uint8_t seed[HT_SEED_BYTES]);
+
+/* /dev/urandom 에서 seed 를 읽어 설정한다. 서버 시작 시 한 번 부른다. */
+enum ht_result hash_table_load_random_seed(void);
 
 #endif

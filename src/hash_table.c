@@ -1,12 +1,30 @@
 #include "hash_table.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "mem.h"
 
-static const uint64_t FNV_OFFSET_BASIS = 0xcbf29ce484222325ULL;
-static const uint64_t FNV_PRIME = 0x100000001b3ULL;
+/* SipHash-2-4 초기화 상수 ("somepseudorandomlygeneratedbytes") */
+static const uint64_t SIP_INIT_V0 = 0x736f6d6570736575ULL;
+static const uint64_t SIP_INIT_V1 = 0x646f72616e646f6dULL;
+static const uint64_t SIP_INIT_V2 = 0x6c7967656e657261ULL;
+static const uint64_t SIP_INIT_V3 = 0x7465646279746573ULL;
+
+enum {
+    SIP_BLOCK_BYTES = 8,
+    SIP_COMPRESSION_ROUNDS = 2,
+    SIP_FINALIZATION_ROUNDS = 4,
+    SIP_FINAL_XOR = 0xff,
+    SIP_LEN_SHIFT = 56,
+    SIP_ROT_A = 13,
+    SIP_ROT_B = 16,
+    SIP_ROT_C = 21,
+    SIP_ROT_D = 17,
+    SIP_ROT_HALF = 32,
+};
 
 enum {
     SHRINK_FILL_PERCENT = 10,
@@ -15,12 +33,22 @@ enum {
 
 /* 불변식: bucket_count 는 2의 거듭제곱이고, entry_count 는 모든 체인의 노드 수와 같다.
  * 늘리기가 실패하지 않는 한 entry_count <= bucket_count (load factor 1.0 이하) 를 유지한다 */
+struct sip_state {
+    uint64_t v0;
+    uint64_t v1;
+    uint64_t v2;
+    uint64_t v3;
+};
+
 struct hash_table {
     struct ht_entry **buckets;
     size_t bucket_count;
     size_t entry_count;
     ht_value_destroy_fn *value_destroy;
 };
+
+/* 모든 테이블이 같은 seed 를 쓴다. 설정 전에는 0 으로 채워져 있다 */
+static uint8_t g_hash_seed[HT_SEED_BYTES];
 
 static struct ht_entry **alloc_buckets(size_t bucket_count);
 static void destroy_chain(const struct hash_table *ht, struct ht_entry *entry);
@@ -35,6 +63,10 @@ static void replace_value(const struct hash_table *ht, struct ht_entry *entry, v
 static void destroy_value(const struct hash_table *ht, void *value);
 static void destroy_entry(const struct hash_table *ht, struct ht_entry *entry);
 static size_t random_below(size_t bound);
+static uint64_t load_le64(const unsigned char *bytes, size_t len);
+static inline uint64_t rotl64(uint64_t x, int bits);
+static void sip_round(struct sip_state *st);
+static void sip_absorb(struct sip_state *st, uint64_t block, int rounds);
 static const struct ht_entry *random_in_chain(const struct ht_entry *head);
 
 struct hash_table *hash_table_create(ht_value_destroy_fn *value_destroy)
@@ -145,12 +177,50 @@ size_t hash_table_bucket_count(const struct hash_table *ht)
 
 uint64_t hash_table_hash(const struct str *key)
 {
-    uint64_t hash = FNV_OFFSET_BASIS;
-    for (size_t i = 0; i < key->len; i++) {
-        hash ^= (unsigned char)key->data[i];
-        hash *= FNV_PRIME;
+    uint64_t k0 = load_le64(g_hash_seed, SIP_BLOCK_BYTES);
+    uint64_t k1 = load_le64(g_hash_seed + SIP_BLOCK_BYTES, SIP_BLOCK_BYTES);
+    struct sip_state st = {
+        .v0 = k0 ^ SIP_INIT_V0,
+        .v1 = k1 ^ SIP_INIT_V1,
+        .v2 = k0 ^ SIP_INIT_V2,
+        .v3 = k1 ^ SIP_INIT_V3,
+    };
+
+    const unsigned char *data = (const unsigned char *)key->data;
+    size_t full_len = key->len - key->len % SIP_BLOCK_BYTES;
+    for (size_t i = 0; i < full_len; i += SIP_BLOCK_BYTES) {
+        sip_absorb(&st, load_le64(data + i, SIP_BLOCK_BYTES), SIP_COMPRESSION_ROUNDS);
     }
-    return hash;
+    uint64_t last = load_le64(data + full_len, key->len - full_len);
+    last |= (uint64_t)key->len << SIP_LEN_SHIFT;
+    sip_absorb(&st, last, SIP_COMPRESSION_ROUNDS);
+
+    st.v2 ^= SIP_FINAL_XOR;
+    for (int i = 0; i < SIP_FINALIZATION_ROUNDS; i++) {
+        sip_round(&st);
+    }
+    return st.v0 ^ st.v1 ^ st.v2 ^ st.v3;
+}
+
+void hash_table_set_seed(const uint8_t seed[HT_SEED_BYTES])
+{
+    memcpy(g_hash_seed, seed, HT_SEED_BYTES);
+}
+
+enum ht_result hash_table_load_random_seed(void)
+{
+    uint8_t seed[HT_SEED_BYTES];
+    FILE *urandom = fopen("/dev/urandom", "rb");
+    if (urandom == NULL) {
+        return HT_IO_ERROR;
+    }
+    size_t read_bytes = fread(seed, 1, sizeof(seed), urandom);
+    fclose(urandom);
+    if (read_bytes != sizeof(seed)) {
+        return HT_IO_ERROR;
+    }
+    hash_table_set_seed(seed);
+    return HT_OK;
 }
 
 /* 버킷은 체인 머리 포인터의 배열이라 포인터 크기로 할당하는 것이 맞다 */
@@ -269,4 +339,42 @@ static const struct ht_entry *random_in_chain(const struct ht_entry *head)
         }
     }
     return picked;
+}
+
+/* bytes 의 앞 len 바이트(최대 8)를 little-endian 정수로 읽는다. 엔디언과 정렬에 상관없이 같다 */
+static uint64_t load_le64(const unsigned char *bytes, size_t len)
+{
+    uint64_t value = 0;
+    for (size_t i = 0; i < len; i++) {
+        value |= (uint64_t)bytes[i] << (i * 8);
+    }
+    return value;
+}
+
+static inline uint64_t rotl64(uint64_t x, int bits)
+{
+    return (x << bits) | (x >> (64 - bits));
+}
+
+static void sip_round(struct sip_state *st)
+{
+    st->v0 += st->v1;
+    st->v1 = rotl64(st->v1, SIP_ROT_A) ^ st->v0;
+    st->v0 = rotl64(st->v0, SIP_ROT_HALF);
+    st->v2 += st->v3;
+    st->v3 = rotl64(st->v3, SIP_ROT_B) ^ st->v2;
+    st->v0 += st->v3;
+    st->v3 = rotl64(st->v3, SIP_ROT_C) ^ st->v0;
+    st->v2 += st->v1;
+    st->v1 = rotl64(st->v1, SIP_ROT_D) ^ st->v2;
+    st->v2 = rotl64(st->v2, SIP_ROT_HALF);
+}
+
+static void sip_absorb(struct sip_state *st, uint64_t block, int rounds)
+{
+    st->v3 ^= block;
+    for (int i = 0; i < rounds; i++) {
+        sip_round(st);
+    }
+    st->v0 ^= block;
 }

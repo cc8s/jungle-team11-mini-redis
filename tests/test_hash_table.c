@@ -19,10 +19,42 @@ enum {
     CHURN_KEY_COUNT = 1000,
 };
 
-/* FNV-1a 64bit 공개 테스트 벡터 */
-static const uint64_t FNV_EMPTY_HASH = 0xcbf29ce484222325ULL;
-static const uint64_t FNV_A_HASH = 0xaf63dc4c8601ec8cULL;
-static const uint64_t FNV_FOOBAR_HASH = 0x85944171f73967e8ULL;
+/* SipHash-2-4 참조 구현의 테스트 벡터: key = 00 01 .. 0f, 메시지 = 00 01 .. (len-1) */
+struct sip_vector {
+    size_t len;
+    uint64_t hash;
+};
+
+static const struct sip_vector SIP_VECTORS[] = {
+    {0, 0x726fdb47dd0e0e31ULL}, {1, 0x74f839c593dc67fdULL},  {7, 0xab0200f58b01d137ULL},
+    {8, 0x93f5f5799a932462ULL}, {15, 0xa129ca6149be45e5ULL}, {16, 0x3f2acc7f57c29bdbULL},
+};
+
+enum {
+    SIP_VECTOR_COUNT = sizeof(SIP_VECTORS) / sizeof(SIP_VECTORS[0]),
+    SIP_VECTOR_MAX_LEN = 16,
+};
+
+static void set_reference_seed(void)
+{
+    uint8_t seed[HT_SEED_BYTES];
+    for (size_t i = 0; i < HT_SEED_BYTES; i++) {
+        seed[i] = (uint8_t)i;
+    }
+    hash_table_set_seed(seed);
+}
+
+static uint64_t hash_counting_bytes(size_t len)
+{
+    char message[SIP_VECTOR_MAX_LEN];
+    for (size_t i = 0; i < len; i++) {
+        message[i] = (char)i;
+    }
+    struct str *key = str_create(message, len);
+    uint64_t hash = hash_table_hash(key);
+    str_destroy(key);
+    return hash;
+}
 
 static struct str *create_from_text(const char *text)
 {
@@ -201,21 +233,46 @@ static void test_destroy_null_does_nothing(void)
     CHECK(mem_used_bytes() == before_bytes);
 }
 
-static void test_hash_empty_key_returns_offset_basis(void)
+static void test_hash_matches_siphash_vectors(void)
 {
-    struct str *key = create_from_text("");
-    CHECK(hash_table_hash(key) == FNV_EMPTY_HASH);
+    set_reference_seed();
+    bool is_all_match = true;
+    for (size_t i = 0; i < SIP_VECTOR_COUNT; i++) {
+        is_all_match =
+            is_all_match && hash_counting_bytes(SIP_VECTORS[i].len) == SIP_VECTORS[i].hash;
+    }
+    CHECK(is_all_match);
+}
+
+static void test_hash_with_different_seed_returns_different_hash(void)
+{
+    static const uint8_t other_seed[HT_SEED_BYTES] = {1};
+    struct str *key = create_from_text("user:42");
+    set_reference_seed();
+    uint64_t reference_hash = hash_table_hash(key);
+    hash_table_set_seed(other_seed);
+    CHECK(hash_table_hash(key) != reference_hash);
     str_destroy(key);
 }
 
-static void test_hash_matches_fnv1a_vectors(void)
+static void test_load_random_seed_changes_hash(void)
 {
-    struct str *a = create_from_text("a");
-    struct str *foobar = create_from_text("foobar");
-    CHECK(hash_table_hash(a) == FNV_A_HASH);
-    CHECK(hash_table_hash(foobar) == FNV_FOOBAR_HASH);
-    str_destroy(a);
-    str_destroy(foobar);
+    struct str *key = create_from_text("user:42");
+    set_reference_seed();
+    uint64_t reference_hash = hash_table_hash(key);
+    CHECK(hash_table_load_random_seed() == HT_OK);
+    CHECK(hash_table_hash(key) != reference_hash);
+    str_destroy(key);
+}
+
+static void test_table_created_after_random_seed_finds_keys(void)
+{
+    static int value = 1;
+    CHECK(hash_table_load_random_seed() == HT_OK);
+    struct hash_table *ht = hash_table_create(ignore_value);
+    set_numbered_keys(ht, CHURN_KEY_COUNT, &value);
+    CHECK(is_all_numbered_found(ht, 0, CHURN_KEY_COUNT));
+    hash_table_destroy(ht);
 }
 
 static void test_hash_same_key_returns_same_hash(void)
@@ -729,8 +786,10 @@ static void run_create_tests(void)
 
 static void run_hash_tests(void)
 {
-    RUN(test_hash_empty_key_returns_offset_basis);
-    RUN(test_hash_matches_fnv1a_vectors);
+    RUN(test_hash_matches_siphash_vectors);
+    RUN(test_hash_with_different_seed_returns_different_hash);
+    RUN(test_load_random_seed_changes_hash);
+    RUN(test_table_created_after_random_seed_finds_keys);
     RUN(test_hash_same_key_returns_same_hash);
     RUN(test_hash_differs_after_nul_returns_different_hash);
     RUN(test_hash_trailing_nul_returns_different_hash);

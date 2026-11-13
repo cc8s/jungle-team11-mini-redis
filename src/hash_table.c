@@ -2,6 +2,9 @@
 
 #include "mem.h"
 
+static const uint64_t FNV_OFFSET_BASIS = 0xcbf29ce484222325ULL;
+static const uint64_t FNV_PRIME = 0x100000001b3ULL;
+
 /* 불변식: bucket_count 는 2의 거듭제곱이고, entry_count 는 모든 체인의 노드 수와 같다 */
 struct hash_table {
     struct ht_entry **buckets;
@@ -12,6 +15,7 @@ struct hash_table {
 
 static struct ht_entry **alloc_buckets(size_t bucket_count);
 static void destroy_chain(const struct hash_table *ht, struct ht_entry *entry);
+static inline size_t bucket_index(const struct hash_table *ht, uint64_t hash);
 
 struct hash_table *hash_table_create(ht_value_destroy_fn *value_destroy)
 {
@@ -52,6 +56,16 @@ size_t hash_table_bucket_count(const struct hash_table *ht)
     return ht->bucket_count;
 }
 
+uint64_t hash_table_hash(const struct str *key)
+{
+    uint64_t hash = FNV_OFFSET_BASIS;
+    for (size_t i = 0; i < key->len; i++) {
+        hash ^= (unsigned char)key->data[i];
+        hash *= FNV_PRIME;
+    }
+    return hash;
+}
+
 /* 버킷은 체인 머리 포인터의 배열이라 포인터 크기로 할당하는 것이 맞다 */
 static struct ht_entry **alloc_buckets(size_t bucket_count)
 {
@@ -70,4 +84,10 @@ static void destroy_chain(const struct hash_table *ht, struct ht_entry *entry)
         mem_free(entry);
         entry = next;
     }
+}
+
+/* bucket_count 가 2의 거듭제곱이라 나머지 연산 대신 하위 비트 마스크로 칸을 고른다 */
+static inline size_t bucket_index(const struct hash_table *ht, uint64_t hash)
+{
+    return (size_t)(hash & (ht->bucket_count - 1));
 }

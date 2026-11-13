@@ -2,6 +2,7 @@
 #define MINI_REDIS_HASH_TABLE_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "str.h"
 
@@ -32,5 +33,8 @@ size_t hash_table_count(const struct hash_table *ht);
 
 /* 버킷 배열의 크기를 반환한다. */
 size_t hash_table_bucket_count(const struct hash_table *ht);
+
+/* 키의 모든 바이트로 64bit 해시를 계산한다. 같은 키는 항상 같은 값이다. */
+uint64_t hash_table_hash(const struct str *key);
 
 #endif

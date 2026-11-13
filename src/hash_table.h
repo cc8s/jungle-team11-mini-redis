@@ -10,6 +10,12 @@ enum {
     HT_INITIAL_SIZE = 16,
 };
 
+enum ht_result {
+    HT_OK = 0,
+    HT_NOT_FOUND,
+    HT_OUT_OF_MEMORY,
+};
+
 /* 테이블이 값을 해제할 때 부르는 함수. 값을 해제하지 않으려면 NULL 을 넘긴다. */
 typedef void ht_value_destroy_fn(void *value);
 
@@ -27,6 +33,12 @@ struct hash_table *hash_table_create(ht_value_destroy_fn *value_destroy);
 
 /* 모든 엔트리의 키와 값을 해제하고 테이블을 해제한다. NULL 이면 아무것도 하지 않는다. */
 void hash_table_destroy(struct hash_table *ht);
+
+/* 키와 값을 가져가 저장한다(같은 키면 이전 값 해제). 실패하면 소유권은 호출자에게 남는다. */
+enum ht_result hash_table_set(struct hash_table *ht, struct str *key, void *value);
+
+/* key 와 바이트가 같은 엔트리를 반환한다. 없으면 NULL. 엔트리는 테이블이 소유한다. */
+const struct ht_entry *hash_table_find(const struct hash_table *ht, const struct str *key);
 
 /* 저장된 엔트리 수를 반환한다. */
 size_t hash_table_count(const struct hash_table *ht);

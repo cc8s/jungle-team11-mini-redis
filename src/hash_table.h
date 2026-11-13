@@ -8,6 +8,7 @@
 
 enum {
     HT_INITIAL_SIZE = 16,
+    HT_RANDOM_MAX_PROBES = 100,
 };
 
 enum ht_result {
@@ -39,6 +40,12 @@ enum ht_result hash_table_set(struct hash_table *ht, struct str *key, void *valu
 
 /* key 와 바이트가 같은 엔트리를 반환한다. 없으면 NULL. 엔트리는 테이블이 소유한다. */
 const struct ht_entry *hash_table_find(const struct hash_table *ht, const struct str *key);
+
+/* key 와 같은 엔트리를 지우고 그 키와 값을 해제한다. 없으면 HT_NOT_FOUND. */
+enum ht_result hash_table_delete(struct hash_table *ht, const struct str *key);
+
+/* 무작위 엔트리 하나를 반환한다. 비었거나 빈 버킷만 HT_RANDOM_MAX_PROBES 번 만나면 NULL. */
+const struct ht_entry *hash_table_random_entry(const struct hash_table *ht);
 
 /* 저장된 엔트리 수를 반환한다. */
 size_t hash_table_count(const struct hash_table *ht);

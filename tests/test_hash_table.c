@@ -13,6 +13,7 @@ enum {
     ENTRY_COUNT = 5,
     COLLIDING_KEY_COUNT = 4,
     COLLISION_SEARCH_LIMIT = 10000,
+    RANDOM_TRIAL_COUNT = 1000,
 };
 
 /* FNV-1a 64bit 공개 테스트 벡터 */
@@ -63,6 +64,52 @@ static void create_colliding_keys(struct str **keys, size_t count)
         }
     }
     CHECK(found == count);
+}
+
+/* 한 체인에 충돌 키 4개를 쌓은 테이블. 맨 앞에 붙이므로 체인 순서는 삽입의 역순이다 */
+struct collision_fixture {
+    struct hash_table *ht;
+    struct str *lookups[COLLIDING_KEY_COUNT];
+    int values[COLLIDING_KEY_COUNT];
+};
+
+enum {
+    CHAIN_END_IDX = 0,
+    CHAIN_MIDDLE_IDX = 1,
+    CHAIN_FRONT_IDX = COLLIDING_KEY_COUNT - 1,
+};
+
+static void collision_fixture_init(struct collision_fixture *fx)
+{
+    struct str *keys[COLLIDING_KEY_COUNT];
+    create_colliding_keys(keys, COLLIDING_KEY_COUNT);
+    fx->ht = hash_table_create(ignore_value);
+    for (size_t i = 0; i < COLLIDING_KEY_COUNT; i++) {
+        fx->lookups[i] = str_dup(keys[i]);
+        fx->values[i] = (int)i;
+        hash_table_set(fx->ht, keys[i], &fx->values[i]);
+    }
+}
+
+static void collision_fixture_deinit(struct collision_fixture *fx)
+{
+    for (size_t i = 0; i < COLLIDING_KEY_COUNT; i++) {
+        str_destroy(fx->lookups[i]);
+    }
+    hash_table_destroy(fx->ht);
+}
+
+/* missing_idx 키만 없고 나머지는 자기 값으로 찾아지면 true. 범위 밖이면 전부 있어야 한다 */
+static bool is_only_missing(const struct collision_fixture *fx, size_t missing_idx)
+{
+    bool is_expected = true;
+    for (size_t i = 0; i < COLLIDING_KEY_COUNT; i++) {
+        const struct ht_entry *entry = hash_table_find(fx->ht, fx->lookups[i]);
+        bool should_exist = i != missing_idx;
+        bool is_found = entry != NULL && entry->value == &fx->values[i];
+        is_expected = is_expected && (should_exist ? is_found : entry == NULL);
+    }
+    return is_expected;
 }
 
 static void test_create_returns_zero_count(void)
@@ -298,24 +345,11 @@ static void test_destroy_with_entries_returns_used_bytes_to_baseline(void)
 
 static void test_colliding_keys_all_findable(void)
 {
-    static int values[COLLIDING_KEY_COUNT];
-    struct str *keys[COLLIDING_KEY_COUNT];
-    struct str *lookups[COLLIDING_KEY_COUNT];
-    create_colliding_keys(keys, COLLIDING_KEY_COUNT);
-    struct hash_table *ht = hash_table_create(ignore_value);
-    for (size_t i = 0; i < COLLIDING_KEY_COUNT; i++) {
-        lookups[i] = str_dup(keys[i]);
-        hash_table_set(ht, keys[i], &values[i]);
-    }
-    CHECK(hash_table_count(ht) == COLLIDING_KEY_COUNT);
-    bool is_all_found = true;
-    for (size_t i = 0; i < COLLIDING_KEY_COUNT; i++) {
-        const struct ht_entry *entry = hash_table_find(ht, lookups[i]);
-        is_all_found = is_all_found && entry != NULL && entry->value == &values[i];
-        str_destroy(lookups[i]);
-    }
-    CHECK(is_all_found);
-    hash_table_destroy(ht);
+    struct collision_fixture fx;
+    collision_fixture_init(&fx);
+    CHECK(hash_table_count(fx.ht) == COLLIDING_KEY_COUNT);
+    CHECK(is_only_missing(&fx, COLLIDING_KEY_COUNT));
+    collision_fixture_deinit(&fx);
 }
 
 static void test_empty_key_set_and_find(void)
@@ -348,7 +382,216 @@ static void test_keys_differing_by_trailing_nul_are_separate(void)
     hash_table_destroy(ht);
 }
 
-int main(void)
+static void test_delete_chain_front_keeps_others(void)
+{
+    struct collision_fixture fx;
+    collision_fixture_init(&fx);
+    CHECK(hash_table_delete(fx.ht, fx.lookups[CHAIN_FRONT_IDX]) == HT_OK);
+    CHECK(hash_table_count(fx.ht) == COLLIDING_KEY_COUNT - 1);
+    CHECK(is_only_missing(&fx, CHAIN_FRONT_IDX));
+    collision_fixture_deinit(&fx);
+}
+
+static void test_delete_chain_middle_keeps_others(void)
+{
+    struct collision_fixture fx;
+    collision_fixture_init(&fx);
+    CHECK(hash_table_delete(fx.ht, fx.lookups[CHAIN_MIDDLE_IDX]) == HT_OK);
+    CHECK(hash_table_count(fx.ht) == COLLIDING_KEY_COUNT - 1);
+    CHECK(is_only_missing(&fx, CHAIN_MIDDLE_IDX));
+    collision_fixture_deinit(&fx);
+}
+
+static void test_delete_chain_end_keeps_others(void)
+{
+    struct collision_fixture fx;
+    collision_fixture_init(&fx);
+    CHECK(hash_table_delete(fx.ht, fx.lookups[CHAIN_END_IDX]) == HT_OK);
+    CHECK(hash_table_count(fx.ht) == COLLIDING_KEY_COUNT - 1);
+    CHECK(is_only_missing(&fx, CHAIN_END_IDX));
+    collision_fixture_deinit(&fx);
+}
+
+static void test_delete_all_colliding_keys_empties_table(void)
+{
+    struct collision_fixture fx;
+    collision_fixture_init(&fx);
+    bool is_all_deleted = true;
+    for (size_t i = 0; i < COLLIDING_KEY_COUNT; i++) {
+        is_all_deleted = is_all_deleted && hash_table_delete(fx.ht, fx.lookups[i]) == HT_OK;
+    }
+    CHECK(is_all_deleted);
+    CHECK(hash_table_count(fx.ht) == 0);
+    collision_fixture_deinit(&fx);
+}
+
+static void test_delete_on_empty_table_returns_not_found(void)
+{
+    struct hash_table *ht = hash_table_create(ignore_value);
+    struct str *lookup = create_from_text("k");
+    CHECK(hash_table_delete(ht, lookup) == HT_NOT_FOUND);
+    CHECK(hash_table_count(ht) == 0);
+    str_destroy(lookup);
+    hash_table_destroy(ht);
+}
+
+static void test_delete_missing_key_returns_not_found(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    hash_table_set(ht, create_from_text("a"), &value);
+    struct str *lookup = create_from_text("b");
+    CHECK(hash_table_delete(ht, lookup) == HT_NOT_FOUND);
+    CHECK(hash_table_count(ht) == 1);
+    str_destroy(lookup);
+    hash_table_destroy(ht);
+}
+
+static void test_delete_twice_returns_not_found(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    hash_table_set(ht, create_from_text("k"), &value);
+    struct str *lookup = create_from_text("k");
+    CHECK(hash_table_delete(ht, lookup) == HT_OK);
+    CHECK(hash_table_delete(ht, lookup) == HT_NOT_FOUND);
+    CHECK(hash_table_find(ht, lookup) == NULL);
+    str_destroy(lookup);
+    hash_table_destroy(ht);
+}
+
+static void test_delete_destroys_value_once(void)
+{
+    static int value = 1;
+    g_destroyed_count = 0;
+    struct hash_table *ht = hash_table_create(count_destroyed_value);
+    hash_table_set(ht, create_from_text("k"), &value);
+    struct str *lookup = create_from_text("k");
+    hash_table_delete(ht, lookup);
+    CHECK(g_destroyed_count == 1);
+    hash_table_destroy(ht);
+    CHECK(g_destroyed_count == 1);
+    str_destroy(lookup);
+}
+
+static void test_delete_frees_key_and_value_bytes(void)
+{
+    struct hash_table *ht = hash_table_create(destroy_str_value);
+    struct str *lookup = create_from_text("k");
+    size_t before_bytes = mem_used_bytes();
+    hash_table_set(ht, create_from_text("k"), create_from_text("value"));
+    hash_table_delete(ht, lookup);
+    CHECK(mem_used_bytes() == before_bytes);
+    str_destroy(lookup);
+    hash_table_destroy(ht);
+}
+
+static void test_set_after_delete_stores_new_value(void)
+{
+    static int first = 1;
+    static int second = 2;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    struct str *lookup = create_from_text("k");
+    hash_table_set(ht, create_from_text("k"), &first);
+    hash_table_delete(ht, lookup);
+    CHECK(hash_table_set(ht, create_from_text("k"), &second) == HT_OK);
+    CHECK(hash_table_count(ht) == 1);
+    CHECK(hash_table_find(ht, lookup)->value == &second);
+    str_destroy(lookup);
+    hash_table_destroy(ht);
+}
+
+static void test_delete_plain_key_keeps_trailing_nul_key(void)
+{
+    static const char raw[] = {'a', '\0'};
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    hash_table_set(ht, create_from_text("a"), &value);
+    hash_table_set(ht, str_create(raw, sizeof(raw)), &value);
+    struct str *plain = create_from_text("a");
+    struct str *with_nul = str_create(raw, sizeof(raw));
+    CHECK(hash_table_delete(ht, plain) == HT_OK);
+    CHECK(hash_table_count(ht) == 1);
+    CHECK(hash_table_find(ht, with_nul) != NULL);
+    str_destroy(plain);
+    str_destroy(with_nul);
+    hash_table_destroy(ht);
+}
+
+static void test_random_entry_on_empty_table_returns_null(void)
+{
+    struct hash_table *ht = hash_table_create(ignore_value);
+    CHECK(hash_table_random_entry(ht) == NULL);
+    hash_table_destroy(ht);
+}
+
+static void test_random_entry_with_one_entry_always_returns_it(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    hash_table_set(ht, create_from_text("only"), &value);
+    bool is_always_same = true;
+    for (int i = 0; i < RANDOM_TRIAL_COUNT; i++) {
+        const struct ht_entry *entry = hash_table_random_entry(ht);
+        is_always_same = is_always_same && entry != NULL && entry->value == &value;
+    }
+    CHECK(is_always_same);
+    hash_table_destroy(ht);
+}
+
+static void test_random_entry_after_deleting_all_returns_null(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    struct str *lookup = create_from_text("k");
+    hash_table_set(ht, create_from_text("k"), &value);
+    hash_table_delete(ht, lookup);
+    CHECK(hash_table_random_entry(ht) == NULL);
+    str_destroy(lookup);
+    hash_table_destroy(ht);
+}
+
+static void test_random_entry_reaches_every_entry_in_chain(void)
+{
+    struct collision_fixture fx;
+    collision_fixture_init(&fx);
+    bool is_seen[COLLIDING_KEY_COUNT] = {false};
+    for (int i = 0; i < RANDOM_TRIAL_COUNT; i++) {
+        const struct ht_entry *entry = hash_table_random_entry(fx.ht);
+        is_seen[*(const int *)entry->value] = true;
+    }
+    bool is_all_seen = true;
+    for (size_t i = 0; i < COLLIDING_KEY_COUNT; i++) {
+        is_all_seen = is_all_seen && is_seen[i];
+    }
+    CHECK(is_all_seen);
+    collision_fixture_deinit(&fx);
+}
+
+static void test_random_entry_reaches_entries_in_different_buckets(void)
+{
+    static int values[ENTRY_COUNT];
+    struct hash_table *ht = hash_table_create(ignore_value);
+    for (int i = 0; i < ENTRY_COUNT; i++) {
+        char buf[KEY_BUF_BYTES];
+        int len = snprintf(buf, sizeof(buf), "key:%d", i);
+        values[i] = i;
+        hash_table_set(ht, str_create(buf, (size_t)len), &values[i]);
+    }
+    bool is_seen[ENTRY_COUNT] = {false};
+    for (int i = 0; i < RANDOM_TRIAL_COUNT; i++) {
+        const struct ht_entry *entry = hash_table_random_entry(ht);
+        is_seen[*(const int *)entry->value] = true;
+    }
+    bool is_all_seen = true;
+    for (size_t i = 0; i < ENTRY_COUNT; i++) {
+        is_all_seen = is_all_seen && is_seen[i];
+    }
+    CHECK(is_all_seen);
+    hash_table_destroy(ht);
+}
+
+static void run_create_tests(void)
 {
     RUN(test_create_returns_zero_count);
     RUN(test_create_allocates_initial_bucket_count);
@@ -356,12 +599,22 @@ int main(void)
     RUN(test_create_without_value_destroy_succeeds);
     RUN(test_destroy_empty_table_returns_used_bytes_to_baseline);
     RUN(test_destroy_null_does_nothing);
+    RUN(test_destroy_with_entries_calls_value_destroy_per_entry);
+    RUN(test_destroy_with_entries_returns_used_bytes_to_baseline);
+}
+
+static void run_hash_tests(void)
+{
     RUN(test_hash_empty_key_returns_offset_basis);
     RUN(test_hash_matches_fnv1a_vectors);
     RUN(test_hash_same_key_returns_same_hash);
     RUN(test_hash_differs_after_nul_returns_different_hash);
     RUN(test_hash_trailing_nul_returns_different_hash);
     RUN(test_hash_sequential_keys_cover_all_initial_buckets);
+}
+
+static void run_set_find_tests(void)
+{
     RUN(test_set_then_find_returns_value);
     RUN(test_find_on_empty_table_returns_null);
     RUN(test_find_missing_key_returns_null);
@@ -370,11 +623,42 @@ int main(void)
     RUN(test_set_existing_key_destroys_old_value);
     RUN(test_set_same_value_pointer_keeps_value);
     RUN(test_overwrite_then_destroy_returns_used_bytes_to_baseline);
-    RUN(test_destroy_with_entries_calls_value_destroy_per_entry);
-    RUN(test_destroy_with_entries_returns_used_bytes_to_baseline);
     RUN(test_colliding_keys_all_findable);
     RUN(test_empty_key_set_and_find);
     RUN(test_keys_differing_by_trailing_nul_are_separate);
+}
+
+static void run_delete_tests(void)
+{
+    RUN(test_delete_chain_front_keeps_others);
+    RUN(test_delete_chain_middle_keeps_others);
+    RUN(test_delete_chain_end_keeps_others);
+    RUN(test_delete_all_colliding_keys_empties_table);
+    RUN(test_delete_on_empty_table_returns_not_found);
+    RUN(test_delete_missing_key_returns_not_found);
+    RUN(test_delete_twice_returns_not_found);
+    RUN(test_delete_destroys_value_once);
+    RUN(test_delete_frees_key_and_value_bytes);
+    RUN(test_set_after_delete_stores_new_value);
+    RUN(test_delete_plain_key_keeps_trailing_nul_key);
+}
+
+static void run_random_entry_tests(void)
+{
+    RUN(test_random_entry_on_empty_table_returns_null);
+    RUN(test_random_entry_with_one_entry_always_returns_it);
+    RUN(test_random_entry_after_deleting_all_returns_null);
+    RUN(test_random_entry_reaches_every_entry_in_chain);
+    RUN(test_random_entry_reaches_entries_in_different_buckets);
+}
+
+int main(void)
+{
+    run_create_tests();
+    run_hash_tests();
+    run_set_find_tests();
+    run_delete_tests();
+    run_random_entry_tests();
     TEST_DONE();
     return 0;
 }

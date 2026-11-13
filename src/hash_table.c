@@ -1,5 +1,7 @@
 #include "hash_table.h"
 
+#include <stdlib.h>
+
 #include "mem.h"
 
 static const uint64_t FNV_OFFSET_BASIS = 0xcbf29ce484222325ULL;
@@ -19,6 +21,9 @@ static inline size_t bucket_index(const struct hash_table *ht, uint64_t hash);
 static struct ht_entry *find_in_chain(struct ht_entry *entry, const struct str *key);
 static void replace_value(const struct hash_table *ht, struct ht_entry *entry, void *value);
 static void destroy_value(const struct hash_table *ht, void *value);
+static void destroy_entry(const struct hash_table *ht, struct ht_entry *entry);
+static size_t random_below(size_t bound);
+static const struct ht_entry *random_in_chain(const struct ht_entry *head);
 
 struct hash_table *hash_table_create(ht_value_destroy_fn *value_destroy)
 {
@@ -77,6 +82,43 @@ const struct ht_entry *hash_table_find(const struct hash_table *ht, const struct
     return find_in_chain(ht->buckets[idx], key);
 }
 
+enum ht_result hash_table_delete(struct hash_table *ht, const struct str *key)
+{
+    struct ht_entry **link = &ht->buckets[bucket_index(ht, hash_table_hash(key))];
+    while (*link != NULL && !str_equal((*link)->key, key)) {
+        link = &(*link)->next;
+    }
+    if (*link == NULL) {
+        return HT_NOT_FOUND;
+    }
+
+    struct ht_entry *entry = *link;
+    *link = entry->next;
+    destroy_entry(ht, entry);
+    ht->entry_count--;
+    return HT_OK;
+}
+
+/* 빈 버킷이 길게 이어져도 루프가 오래 돌지 않도록 탐색 칸 수에 상한을 둔다 */
+const struct ht_entry *hash_table_random_entry(const struct hash_table *ht)
+{
+    if (ht->entry_count == 0) {
+        return NULL;
+    }
+    size_t probe_limit = ht->bucket_count;
+    if (probe_limit > HT_RANDOM_MAX_PROBES) {
+        probe_limit = HT_RANDOM_MAX_PROBES;
+    }
+    size_t start_idx = random_below(ht->bucket_count);
+    for (size_t i = 0; i < probe_limit; i++) {
+        const struct ht_entry *head = ht->buckets[(start_idx + i) & (ht->bucket_count - 1)];
+        if (head != NULL) {
+            return random_in_chain(head);
+        }
+    }
+    return NULL;
+}
+
 size_t hash_table_count(const struct hash_table *ht)
 {
     return ht->entry_count;
@@ -108,9 +150,7 @@ static void destroy_chain(const struct hash_table *ht, struct ht_entry *entry)
 {
     while (entry != NULL) {
         struct ht_entry *next = entry->next;
-        str_destroy(entry->key);
-        destroy_value(ht, entry->value);
-        mem_free(entry);
+        destroy_entry(ht, entry);
         entry = next;
     }
 }
@@ -143,4 +183,30 @@ static void destroy_value(const struct hash_table *ht, void *value)
     if (ht->value_destroy != NULL) {
         ht->value_destroy(value);
     }
+}
+
+static void destroy_entry(const struct hash_table *ht, struct ht_entry *entry)
+{
+    str_destroy(entry->key);
+    destroy_value(ht, entry->value);
+    mem_free(entry);
+}
+
+static size_t random_below(size_t bound)
+{
+    return (size_t)random() % bound;
+}
+
+/* 체인 길이를 몰라도 한 번 훑으며 k 번째 노드를 1/k 확률로 고르면 모든 노드가 균등하게 뽑힌다 */
+static const struct ht_entry *random_in_chain(const struct ht_entry *head)
+{
+    const struct ht_entry *picked = head;
+    size_t seen_count = 1;
+    for (const struct ht_entry *entry = head->next; entry != NULL; entry = entry->next) {
+        seen_count++;
+        if (random_below(seen_count) == 0) {
+            picked = entry;
+        }
+    }
+    return picked;
 }

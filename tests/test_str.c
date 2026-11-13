@@ -3,7 +3,6 @@
 #include "str.h"
 #include "test.h"
 
-/* \0 이 없는 C 문자열로 str 을 만든다. \0 이 들어간 값은 배열과 sizeof 로 따로 만든다. */
 static struct str *create_from_text(const char *text)
 {
     return str_create(text, strlen(text));
@@ -115,7 +114,6 @@ static void test_equal_different_bytes_returns_false(void)
 
 static void test_equal_differs_after_nul_returns_false(void)
 {
-    /* strcmp 였다면 \0 에서 멈춰 같다고 판단했을 경우 */
     static const char raw_a[] = {'a', '\0', 'b'};
     static const char raw_b[] = {'a', '\0', 'c'};
     struct str *a = str_create(raw_a, sizeof(raw_a));

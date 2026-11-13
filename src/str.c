@@ -4,11 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* TODO(bloro): 1.3 mem 모듈이 생기면 malloc / free 를 mem_alloc / mem_free 로 바꾼다 */
-
 struct str *str_create(const char *data, size_t len)
 {
-    /* 헤더 + 내용 + 끝의 \0 한 바이트가 size_t 를 넘지 않아야 한다 */
     if (len > SIZE_MAX - sizeof(struct str) - 1) {
         return NULL;
     }

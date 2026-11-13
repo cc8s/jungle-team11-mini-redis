@@ -42,6 +42,11 @@ C에는 클래스와 namespace 가 없으므로 **struct 가 클래스, 모듈 �
 | HTTP 파서 · 응답 | `http.c` | `http_` / 상수 `HTTP_` |
 | 라우팅 (`/keys/{key}`) | `router.c` | `router_` / 상수 `ROUTER_` |
 | 만료 | `expire.c` | `expire_` / 상수 `EXPIRE_` |
+| 바이너리 안전 문자열 | `str.c` | `str_` |
+| 시각 | `clock.c` | `clock_` |
+| 메모리 래퍼 | `mem.c` | `mem_` |
+| 저장소 (키 + 만료 테이블) | `db.c` | `db_` / 상수 `DB_` |
+| 서버 · 설정 · 주기 작업 | `server.c` | `server_` / 상수 `SERVER_` |
 
 ### 1.3 HTTP 인터페이스 이름
 

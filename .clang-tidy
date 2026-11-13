@@ -1,0 +1,40 @@
+# 규칙 설명: docs/STYLE_GUIDE.md
+# 실행: clang-tidy src/*.c -- -std=c11 -D_GNU_SOURCE -Isrc
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  clang-analyzer-*,
+  misc-unused-parameters,
+  readability-braces-around-statements,
+  readability-identifier-naming,
+  readability-function-size,
+  readability-magic-numbers,
+  readability-misleading-indentation,
+  readability-non-const-parameter
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '(src|tests)/.*'
+
+CheckOptions:
+  # 1장 네이밍: 식별자는 snake_case, 매크로와 enum 값은 UPPER_SNAKE_CASE
+  - { key: readability-identifier-naming.FunctionCase,         value: lower_case }
+  - { key: readability-identifier-naming.VariableCase,         value: lower_case }
+  - { key: readability-identifier-naming.ParameterCase,        value: lower_case }
+  - { key: readability-identifier-naming.MemberCase,           value: lower_case }
+  - { key: readability-identifier-naming.StructCase,           value: lower_case }
+  - { key: readability-identifier-naming.UnionCase,            value: lower_case }
+  - { key: readability-identifier-naming.EnumCase,             value: lower_case }
+  - { key: readability-identifier-naming.TypedefCase,          value: lower_case }
+  - { key: readability-identifier-naming.EnumConstantCase,     value: UPPER_CASE }
+  - { key: readability-identifier-naming.MacroDefinitionCase,  value: UPPER_CASE }
+  - { key: readability-identifier-naming.GlobalConstantCase,   value: UPPER_CASE }
+  - { key: readability-identifier-naming.GlobalVariableCase,   value: lower_case }
+
+  # 2.3장 함수 크기: 40줄, 중첩 3단계
+  - { key: readability-function-size.LineThreshold,    value: 40 }
+  - { key: readability-function-size.NestingThreshold, value: 3 }
+  - { key: readability-function-size.ParameterThreshold, value: 3 }
+
+  # 5장 매직 넘버: 0, 1, 2 와 흔한 비트 시프트 값은 허용
+  - { key: readability-magic-numbers.IgnoredIntegerValues, value: '1;2;8;16;32;64' }

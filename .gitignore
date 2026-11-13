@@ -8,3 +8,9 @@ build/
 .vscode/
 __pycache__/
 .venv/
+
+# 문서: README, GitHub 템플릿, 스타일 가이드만 올리고 나머지 .md 는 로컬에만 둔다
+*.md
+!README.md
+!/.github/**/*.md
+!/docs/STYLE_GUIDE.md

@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "clock.h"
 #include "mem.h"
 
 /* SipHash-2-4 초기화 상수 ("somepseudorandomlygeneratedbytes") */
@@ -31,8 +32,10 @@ enum {
     PERCENT_SCALE = 100,
 };
 
-/* 불변식: bucket_count 는 2의 거듭제곱이고, entry_count 는 모든 체인의 노드 수와 같다.
- * 늘리기가 실패하지 않는 한 entry_count <= bucket_count (load factor 1.0 이하) 를 유지한다 */
+enum {
+    NOT_REHASHING = -1,
+};
+
 struct sip_state {
     uint64_t v0;
     uint64_t v1;
@@ -40,34 +43,53 @@ struct sip_state {
     uint64_t v3;
 };
 
-struct hash_table {
+/* 버킷 배열 하나. 불변식: bucket_count 는 0 이거나 2의 거듭제곱이고,
+ * entry_count 는 모든 체인의 노드 수와 같다 */
+struct ht_table {
     struct ht_entry **buckets;
     size_t bucket_count;
     size_t entry_count;
+};
+
+/* rehash 중이 아니면 tables[1] 은 비어 있고(buckets == NULL) rehash_idx 는 NOT_REHASHING 이다.
+ * rehash 중이면 tables[0] 의 rehash_idx 미만 버킷은 모두 비어 있고, 그 키들은 tables[1] 에 있다.
+ * 늘리기가 실패하지 않는 한 tables[0] 의 load factor 는 1.0 이하다 */
+struct hash_table {
+    struct ht_table tables[2];
+    long rehash_idx;
     ht_value_destroy_fn *value_destroy;
 };
 
 /* 모든 테이블이 같은 seed 를 쓴다. 설정 전에는 0 으로 채워져 있다 */
 static uint8_t g_hash_seed[HT_SEED_BYTES];
 
+static bool table_init(struct ht_table *table, size_t bucket_count);
+static void table_clear(const struct hash_table *ht, struct ht_table *table);
+static inline size_t table_index(const struct ht_table *table, uint64_t hash);
+static struct ht_entry *table_find(const struct ht_table *table, const struct str *key,
+                                   uint64_t hash);
+static void table_push(struct ht_table *table, struct ht_entry *entry, uint64_t hash);
+static struct ht_entry *table_unlink(struct ht_table *table, const struct str *key, uint64_t hash);
+static const struct ht_entry *table_random_entry(const struct ht_table *table, size_t first_idx);
 static struct ht_entry **alloc_buckets(size_t bucket_count);
-static void destroy_chain(const struct hash_table *ht, struct ht_entry *entry);
-static inline size_t bucket_index(const struct hash_table *ht, uint64_t hash);
-static inline size_t index_for(uint64_t hash, size_t bucket_count);
 static void grow_if_needed(struct hash_table *ht);
 static void shrink_if_needed(struct hash_table *ht);
-static void resize(struct hash_table *ht, size_t new_bucket_count);
-static void move_chain(struct ht_entry *entry, struct ht_entry **new_buckets, size_t new_count);
-static struct ht_entry *find_in_chain(struct ht_entry *entry, const struct str *key);
+static void start_rehash(struct hash_table *ht, size_t new_bucket_count);
+static struct ht_entry *find_entry(const struct hash_table *ht, const struct str *key,
+                                   uint64_t hash);
+static const struct ht_entry *random_entry_from(const struct hash_table *ht, int table_idx);
+static bool skip_empty_buckets(struct hash_table *ht, size_t *empty_visits_left);
+static void move_bucket(struct hash_table *ht);
+static void finish_rehash(struct hash_table *ht);
 static void replace_value(const struct hash_table *ht, struct ht_entry *entry, void *value);
 static void destroy_value(const struct hash_table *ht, void *value);
 static void destroy_entry(const struct hash_table *ht, struct ht_entry *entry);
 static size_t random_below(size_t bound);
+static const struct ht_entry *random_in_chain(const struct ht_entry *head);
 static uint64_t load_le64(const unsigned char *bytes, size_t len);
 static inline uint64_t rotl64(uint64_t x, int bits);
 static void sip_round(struct sip_state *st);
 static void sip_absorb(struct sip_state *st, uint64_t block, int rounds);
-static const struct ht_entry *random_in_chain(const struct ht_entry *head);
 
 struct hash_table *hash_table_create(ht_value_destroy_fn *value_destroy)
 {
@@ -75,13 +97,12 @@ struct hash_table *hash_table_create(ht_value_destroy_fn *value_destroy)
     if (ht == NULL) {
         return NULL;
     }
-    ht->buckets = alloc_buckets(HT_INITIAL_SIZE);
-    if (ht->buckets == NULL) {
+    if (!table_init(&ht->tables[0], HT_INITIAL_SIZE)) {
         mem_free(ht);
         return NULL;
     }
-    ht->bucket_count = HT_INITIAL_SIZE;
-    ht->entry_count = 0;
+    ht->tables[1] = (struct ht_table){0};
+    ht->rehash_idx = NOT_REHASHING;
     ht->value_destroy = value_destroy;
     return ht;
 }
@@ -91,17 +112,18 @@ void hash_table_destroy(struct hash_table *ht)
     if (ht == NULL) {
         return;
     }
-    for (size_t i = 0; i < ht->bucket_count; i++) {
-        destroy_chain(ht, ht->buckets[i]);
-    }
-    mem_free(ht->buckets);
+    table_clear(ht, &ht->tables[0]);
+    table_clear(ht, &ht->tables[1]);
     mem_free(ht);
 }
 
+/* 연산마다 rehash 를 한 칸 진행한다. rehash 중 새 키는 tables[1] 에만 넣는다:
+ * tables[0] 의 이미 옮긴 버킷에 넣으면 교체 때 함께 사라진다 */
 enum ht_result hash_table_set(struct hash_table *ht, struct str *key, void *value)
 {
-    size_t idx = bucket_index(ht, hash_table_hash(key));
-    struct ht_entry *existing = find_in_chain(ht->buckets[idx], key);
+    hash_table_rehash_step(ht, 1);
+    uint64_t hash = hash_table_hash(key);
+    struct ht_entry *existing = find_entry(ht, key, hash);
     if (existing != NULL) {
         replace_value(ht, existing, value);
         str_destroy(key);
@@ -114,65 +136,94 @@ enum ht_result hash_table_set(struct hash_table *ht, struct str *key, void *valu
     }
     entry->key = key;
     entry->value = value;
-    entry->next = ht->buckets[idx];
-    ht->buckets[idx] = entry;
-    ht->entry_count++;
+    int dst_idx = hash_table_is_rehashing(ht) ? 1 : 0;
+    table_push(&ht->tables[dst_idx], entry, hash);
     grow_if_needed(ht);
     return HT_OK;
 }
 
+/* const 라 rehash 를 진행하지 않는다. 진행은 set · delete 와 주기 작업이 맡는다 */
 const struct ht_entry *hash_table_find(const struct hash_table *ht, const struct str *key)
 {
-    size_t idx = bucket_index(ht, hash_table_hash(key));
-    return find_in_chain(ht->buckets[idx], key);
+    return find_entry(ht, key, hash_table_hash(key));
 }
 
 enum ht_result hash_table_delete(struct hash_table *ht, const struct str *key)
 {
-    struct ht_entry **link = &ht->buckets[bucket_index(ht, hash_table_hash(key))];
-    while (*link != NULL && !str_equal((*link)->key, key)) {
-        link = &(*link)->next;
+    hash_table_rehash_step(ht, 1);
+    uint64_t hash = hash_table_hash(key);
+    struct ht_entry *entry = table_unlink(&ht->tables[0], key, hash);
+    if (entry == NULL) {
+        entry = table_unlink(&ht->tables[1], key, hash);
     }
-    if (*link == NULL) {
+    if (entry == NULL) {
         return HT_NOT_FOUND;
     }
-
-    struct ht_entry *entry = *link;
-    *link = entry->next;
     destroy_entry(ht, entry);
-    ht->entry_count--;
     shrink_if_needed(ht);
     return HT_OK;
 }
 
-/* 빈 버킷이 길게 이어져도 루프가 오래 돌지 않도록 탐색 칸 수에 상한을 둔다 */
+/* 두 테이블 중 하나를 엔트리 수에 비례해 고른 뒤 그 안에서 뽑는다. 못 찾으면 다른 쪽도 본다 */
 const struct ht_entry *hash_table_random_entry(const struct hash_table *ht)
 {
-    if (ht->entry_count == 0) {
+    size_t total_count = hash_table_count(ht);
+    if (total_count == 0) {
         return NULL;
     }
-    size_t probe_limit = ht->bucket_count;
-    if (probe_limit > HT_RANDOM_MAX_PROBES) {
-        probe_limit = HT_RANDOM_MAX_PROBES;
+    int first_idx = random_below(total_count) < ht->tables[0].entry_count ? 0 : 1;
+    const struct ht_entry *entry = random_entry_from(ht, first_idx);
+    if (entry == NULL) {
+        entry = random_entry_from(ht, 1 - first_idx);
     }
-    size_t start_idx = random_below(ht->bucket_count);
-    for (size_t i = 0; i < probe_limit; i++) {
-        const struct ht_entry *head = ht->buckets[(start_idx + i) & (ht->bucket_count - 1)];
-        if (head != NULL) {
-            return random_in_chain(head);
-        }
-    }
-    return NULL;
+    return entry;
 }
 
 size_t hash_table_count(const struct hash_table *ht)
 {
-    return ht->entry_count;
+    return ht->tables[0].entry_count + ht->tables[1].entry_count;
 }
 
 size_t hash_table_bucket_count(const struct hash_table *ht)
 {
-    return ht->bucket_count;
+    if (hash_table_is_rehashing(ht)) {
+        return ht->tables[1].bucket_count;
+    }
+    return ht->tables[0].bucket_count;
+}
+
+bool hash_table_is_rehashing(const struct hash_table *ht)
+{
+    return ht->rehash_idx != NOT_REHASHING;
+}
+
+/* 이벤트 루프가 한 번에 오래 막히지 않도록 옮기는 버킷 수와 지나치는 빈 버킷 수를 모두 제한한다 */
+void hash_table_rehash_step(struct hash_table *ht, size_t bucket_count)
+{
+    size_t empty_visits_left = bucket_count * HT_REHASH_EMPTY_VISITS;
+    for (size_t moved = 0; moved < bucket_count && hash_table_is_rehashing(ht); moved++) {
+        if (ht->tables[0].entry_count == 0) {
+            finish_rehash(ht);
+            return;
+        }
+        if (!skip_empty_buckets(ht, &empty_visits_left)) {
+            return;
+        }
+        move_bucket(ht);
+    }
+}
+
+/* 시계를 매 버킷마다 읽지 않도록 100개씩 옮긴 뒤에만 경과 시간을 확인한다.
+ * 그래서 예산을 최대 한 묶음만큼 넘길 수 있다 */
+void hash_table_rehash_for_ms(struct hash_table *ht, int64_t budget_ms)
+{
+    int64_t start_ms = clock_now_ms();
+    while (hash_table_is_rehashing(ht)) {
+        hash_table_rehash_step(ht, HT_REHASH_CHUNK_BUCKETS);
+        if (clock_now_ms() - start_ms >= budget_ms) {
+            return;
+        }
+    }
 }
 
 uint64_t hash_table_hash(const struct str *key)
@@ -223,6 +274,117 @@ enum ht_result hash_table_load_random_seed(void)
     return HT_OK;
 }
 
+static bool table_init(struct ht_table *table, size_t bucket_count)
+{
+    table->buckets = alloc_buckets(bucket_count);
+    if (table->buckets == NULL) {
+        return false;
+    }
+    table->bucket_count = bucket_count;
+    table->entry_count = 0;
+    return true;
+}
+
+/* 모든 엔트리와 버킷 배열을 해제하고 빈 테이블(buckets == NULL)로 되돌린다 */
+static void table_clear(const struct hash_table *ht, struct ht_table *table)
+{
+    for (size_t i = 0; i < table->bucket_count; i++) {
+        struct ht_entry *entry = table->buckets[i];
+        while (entry != NULL) {
+            struct ht_entry *next = entry->next;
+            destroy_entry(ht, entry);
+            entry = next;
+        }
+    }
+    mem_free(table->buckets);
+    *table = (struct ht_table){0};
+}
+
+/* bucket_count 가 2의 거듭제곱이라 나머지 연산 대신 하위 비트 마스크로 칸을 고른다 */
+static inline size_t table_index(const struct ht_table *table, uint64_t hash)
+{
+    return (size_t)(hash & (table->bucket_count - 1));
+}
+
+static struct ht_entry *table_find(const struct ht_table *table, const struct str *key,
+                                   uint64_t hash)
+{
+    if (table->entry_count == 0) {
+        return NULL;
+    }
+    struct ht_entry *entry = table->buckets[table_index(table, hash)];
+    while (entry != NULL && !str_equal(entry->key, key)) {
+        entry = entry->next;
+    }
+    return entry;
+}
+
+/* 체인 맨 앞에 붙인다 (O(1)) */
+static void table_push(struct ht_table *table, struct ht_entry *entry, uint64_t hash)
+{
+    size_t idx = table_index(table, hash);
+    entry->next = table->buckets[idx];
+    table->buckets[idx] = entry;
+    table->entry_count++;
+}
+
+/* key 와 같은 엔트리를 체인에서 떼어 돌려준다. 해제는 호출자가 한다. 없으면 NULL */
+static struct ht_entry *table_unlink(struct ht_table *table, const struct str *key, uint64_t hash)
+{
+    if (table->entry_count == 0) {
+        return NULL;
+    }
+    struct ht_entry **link = &table->buckets[table_index(table, hash)];
+    while (*link != NULL && !str_equal((*link)->key, key)) {
+        link = &(*link)->next;
+    }
+    struct ht_entry *entry = *link;
+    if (entry != NULL) {
+        *link = entry->next;
+        table->entry_count--;
+    }
+    return entry;
+}
+
+/* [first_idx, bucket_count) 안의 무작위 칸에서 시작해 그 범위만 훑는다.
+ * 빈 버킷이 길게 이어져도 루프가 오래 돌지 않도록 탐색 칸 수에 상한을 둔다 */
+static const struct ht_entry *table_random_entry(const struct ht_table *table, size_t first_idx)
+{
+    if (table->entry_count == 0) {
+        return NULL;
+    }
+    size_t range_len = table->bucket_count - first_idx;
+    size_t probe_limit = range_len < HT_RANDOM_MAX_PROBES ? range_len : HT_RANDOM_MAX_PROBES;
+    size_t start_offset = random_below(range_len);
+    for (size_t i = 0; i < probe_limit; i++) {
+        const struct ht_entry *head = table->buckets[first_idx + (start_offset + i) % range_len];
+        if (head != NULL) {
+            return random_in_chain(head);
+        }
+    }
+    return NULL;
+}
+
+static struct ht_entry *find_entry(const struct hash_table *ht, const struct str *key,
+                                   uint64_t hash)
+{
+    struct ht_entry *entry = table_find(&ht->tables[0], key, hash);
+    if (entry == NULL) {
+        entry = table_find(&ht->tables[1], key, hash);
+    }
+    return entry;
+}
+
+/* rehash 중 tables[0] 의 rehash_idx 앞 버킷은 모두 비었으므로 그 뒤에서만 뽑는다 */
+static const struct ht_entry *random_entry_from(const struct hash_table *ht, int table_idx)
+{
+    size_t first_idx = 0;
+    if (table_idx == 0 && hash_table_is_rehashing(ht)) {
+        first_idx = (size_t)ht->rehash_idx;
+    }
+    return table_random_entry(&ht->tables[table_idx], first_idx);
+}
+
 /* 버킷은 체인 머리 포인터의 배열이라 포인터 크기로 할당하는 것이 맞다 */
 static struct ht_entry **alloc_buckets(size_t bucket_count)
 {
@@ -230,73 +392,81 @@ static struct ht_entry **alloc_buckets(size_t bucket_count)
     return mem_calloc(bucket_count, sizeof(struct ht_entry *));
 }
 
-static void destroy_chain(const struct hash_table *ht, struct ht_entry *entry)
-{
-    while (entry != NULL) {
-        struct ht_entry *next = entry->next;
-        destroy_entry(ht, entry);
-        entry = next;
-    }
-}
-
-/* bucket_count 가 2의 거듭제곱이라 나머지 연산 대신 하위 비트 마스크로 칸을 고른다 */
-static inline size_t bucket_index(const struct hash_table *ht, uint64_t hash)
-{
-    return index_for(hash, ht->bucket_count);
-}
-
-static inline size_t index_for(uint64_t hash, size_t bucket_count)
-{
-    return (size_t)(hash & (bucket_count - 1));
-}
-
 static void grow_if_needed(struct hash_table *ht)
 {
-    if (ht->entry_count > ht->bucket_count && ht->bucket_count <= SIZE_MAX / 2) {
-        resize(ht, ht->bucket_count * 2);
+    const struct ht_table *main_table = &ht->tables[0];
+    if (main_table->entry_count > main_table->bucket_count &&
+        main_table->bucket_count <= SIZE_MAX / 2) {
+        start_rehash(ht, main_table->bucket_count * 2);
     }
 }
 
 static void shrink_if_needed(struct hash_table *ht)
 {
-    bool is_sparse = ht->entry_count * PERCENT_SCALE < ht->bucket_count * SHRINK_FILL_PERCENT;
-    if (is_sparse && ht->bucket_count > HT_INITIAL_SIZE) {
-        resize(ht, ht->bucket_count / 2);
+    const struct ht_table *main_table = &ht->tables[0];
+    bool is_sparse =
+        main_table->entry_count * PERCENT_SCALE < main_table->bucket_count * SHRINK_FILL_PERCENT;
+    if (is_sparse && main_table->bucket_count > HT_INITIAL_SIZE) {
+        start_rehash(ht, main_table->bucket_count / 2);
     }
 }
 
-/* 새 버킷 할당이 실패하면 크기를 그대로 둔다. 느려질 뿐 데이터는 잃지 않는다 */
-static void resize(struct hash_table *ht, size_t new_bucket_count)
+/* tables[1] 을 만들고 rehash_idx 를 0 으로 둔다. 이미 rehash 중이거나 할당이 실패하면 무시 */
+static void start_rehash(struct hash_table *ht, size_t new_bucket_count)
 {
-    struct ht_entry **new_buckets = alloc_buckets(new_bucket_count);
-    if (new_buckets == NULL) {
+    if (hash_table_is_rehashing(ht)) {
         return;
     }
-    for (size_t i = 0; i < ht->bucket_count; i++) {
-        move_chain(ht->buckets[i], new_buckets, new_bucket_count);
+    if (!table_init(&ht->tables[1], new_bucket_count)) {
+        return;
     }
-    mem_free(ht->buckets);
-    ht->buckets = new_buckets;
-    ht->bucket_count = new_bucket_count;
+    ht->rehash_idx = 0;
 }
 
-static void move_chain(struct ht_entry *entry, struct ht_entry **new_buckets, size_t new_count)
+/* rehash_idx 를 비지 않은 버킷까지 옮긴다. 예산을 다 쓰면 false.
+ * tables[0] 에 엔트리가 남아 있으면 rehash_idx 이후에 비지 않은 버킷이 반드시 있다 */
+static bool skip_empty_buckets(struct hash_table *ht, size_t *empty_visits_left)
 {
+    const struct ht_table *src = &ht->tables[0];
+    while (src->buckets[ht->rehash_idx] == NULL) {
+        if (*empty_visits_left == 0) {
+            return false;
+        }
+        (*empty_visits_left)--;
+        ht->rehash_idx++;
+    }
+    return true;
+}
+
+/* tables[0] 의 rehash_idx 번 버킷을 tables[1] 로 옮기고, tables[0] 이 비면 rehash 를 끝낸다 */
+static void move_bucket(struct hash_table *ht)
+{
+    struct ht_table *src = &ht->tables[0];
+    size_t idx = (size_t)ht->rehash_idx;
+    struct ht_entry *entry = src->buckets[idx];
+    src->buckets[idx] = NULL;
     while (entry != NULL) {
         struct ht_entry *next = entry->next;
-        size_t idx = index_for(hash_table_hash(entry->key), new_count);
-        entry->next = new_buckets[idx];
-        new_buckets[idx] = entry;
+        table_push(&ht->tables[1], entry, hash_table_hash(entry->key));
+        src->entry_count--;
         entry = next;
+    }
+    ht->rehash_idx++;
+    if (src->entry_count == 0) {
+        finish_rehash(ht);
     }
 }
 
-static struct ht_entry *find_in_chain(struct ht_entry *entry, const struct str *key)
+/* 비어 버린 tables[0] 의 버킷 배열을 해제하고 tables[1] 을 tables[0] 자리로 옮긴다.
+ * rehash 중에 쌓인 삽입 · 삭제로 다시 조건이 맞으면 다음 rehash 를 바로 시작한다 */
+static void finish_rehash(struct hash_table *ht)
 {
-    while (entry != NULL && !str_equal(entry->key, key)) {
-        entry = entry->next;
-    }
-    return entry;
+    mem_free(ht->tables[0].buckets);
+    ht->tables[0] = ht->tables[1];
+    ht->tables[1] = (struct ht_table){0};
+    ht->rehash_idx = NOT_REHASHING;
+    grow_if_needed(ht);
+    shrink_if_needed(ht);
 }
 
 /* 같은 값 포인터로 덮어쓰면 해제하지 않는다. 해제하면 저장된 값이 바로 dangling 이 된다 */

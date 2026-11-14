@@ -15,7 +15,7 @@ LIB_SRCS := $(filter-out src/main.c, $(SRCS))
 LIB_OBJS := $(patsubst src/%.c, $(BUILD)/%.o, $(LIB_SRCS))
 TESTS    := $(patsubst tests/%.c, $(TBIN)/%, $(wildcard tests/test_*.c))
 
-.PHONY: all test asan run clean
+.PHONY: all test itest asan run clean
 
 all: $(BIN)
 
@@ -34,6 +34,10 @@ $(TBIN)/%: tests/%.c $(LIB_OBJS) | $(TBIN)
 # 테스트 실행 파일을 하나씩 돌리고, 하나라도 실패하면 make 가 실패한다
 test: $(TESTS)
 	@for t in $(TESTS); do echo "== $$t"; ./$$t || exit 1; done
+
+# 통합 테스트: 진짜 서버 프로세스를 띄워 소켓으로 확인 (python3 표준 라이브러리만)
+itest: $(BIN)
+	python3 tests/integration/test_server.py ./$(BIN)
 
 asan:
 	$(MAKE) test BUILD=build/asan TBIN=tests/bin/asan EXTRA_CFLAGS="$(SAN)" EXTRA_LDFLAGS="$(SAN)"

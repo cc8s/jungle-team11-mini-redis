@@ -67,4 +67,24 @@ int dict_del(dict *d, const char *key, size_t keylen);
 size_t dict_len(const dict *d);
 void dict_rehash_step(dict *d, int n);
 
+/* 무작위 엔트리 하나 (active 만료 샘플링용). 비어 있으면 NULL.
+ * 키가 있는 버킷을 무작위로 고른 뒤 그 체인에서 무작위로 고른다. 체인 길이가 다르면 완전히 고르지는 않다(Redis 와 같음).
+ * rehash 를 진행시키지 않는다. 난수는 dict_set_rand 로 바꿔 끼울 수 있다(NULL 이면 rand). */
+entry *dict_random_entry(dict *d);
+void dict_set_rand(int (*rand_fn)(void));
+
+/* 순회 (KEYS 용). 모든 키를 정확히 한 번씩 돌려준다. rehash 도중이면 ht[0] 다음 ht[1].
+ * 순회 중에는 dict_set / dict_get / dict_del 을 부르지 않는다(rehash 가 진행되어 엔트리가 옮겨진다). */
+typedef struct {
+    dict *d;
+    int table;
+    size_t bucket;
+    entry *next;
+} dict_iter;
+void dict_iter_init(dict_iter *it, dict *d);
+entry *dict_iter_next(dict_iter *it); /* 끝이면 NULL */
+
+/* 전부 지우고 처음 상태(버킷 DICT_INITIAL_SIZE 개, rehash 아님)로 (FLUSHALL 용). 실패하면 -1 */
+int dict_clear(dict *d);
+
 #endif

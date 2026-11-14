@@ -19,3 +19,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: make asan
+
+  # 진짜 Redis 와 응답 바이트 비교. ubuntu-22.04 기본 패키지는 Redis 6 이라(에러 문구가 다름) 공식 저장소에서 받는다
+  difftest:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Redis 7+ from packages.redis.io
+        run: |
+          curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
+          sudo apt-get update
+          sudo apt-get install -y redis-server
+          sudo systemctl stop redis-server || true
+          redis-server --version
+      - run: make difftest

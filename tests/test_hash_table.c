@@ -790,6 +790,38 @@ static void test_grow_and_shrink_leave_table_not_rehashing(void)
     hash_table_destroy(ht);
 }
 
+/* 늘리기가 끝나면 32칸 버킷 배열 하나만 남는다: 옛 16칸 배열은 해제되고 tables[1] 은 비어 있다 */
+static void test_grow_keeps_only_one_bucket_array(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    size_t created_bytes = mem_used_bytes();
+    size_t entry_bytes = 0;
+    for (int i = 0; i <= HT_INITIAL_SIZE; i++) {
+        struct str *key = create_numbered_key(i);
+        entry_bytes += sizeof(struct ht_entry) + sizeof(*key) + key->len + 1;
+        hash_table_set(ht, key, &value);
+    }
+    size_t grown_bucket_bytes = (size_t)HT_INITIAL_SIZE * sizeof(struct ht_entry *);
+    CHECK(hash_table_bucket_count(ht) == (size_t)HT_INITIAL_SIZE * 2);
+    CHECK(!hash_table_is_rehashing(ht));
+    CHECK(mem_used_bytes() == created_bytes + entry_bytes + grown_bucket_bytes);
+    hash_table_destroy(ht);
+}
+
+static void test_shrink_keeps_only_one_bucket_array(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    size_t created_bytes = mem_used_bytes();
+    set_numbered_keys(ht, CHURN_KEY_COUNT, &value);
+    delete_numbered_keys(ht, 0, CHURN_KEY_COUNT);
+    CHECK(hash_table_bucket_count(ht) == HT_INITIAL_SIZE);
+    CHECK(!hash_table_is_rehashing(ht));
+    CHECK(mem_used_bytes() == created_bytes);
+    hash_table_destroy(ht);
+}
+
 static void run_create_tests(void)
 {
     RUN(test_create_returns_zero_count);
@@ -868,6 +900,8 @@ static void run_two_table_tests(void)
 {
     RUN(test_create_is_not_rehashing);
     RUN(test_grow_and_shrink_leave_table_not_rehashing);
+    RUN(test_grow_keeps_only_one_bucket_array);
+    RUN(test_shrink_keeps_only_one_bucket_array);
 }
 
 int main(void)

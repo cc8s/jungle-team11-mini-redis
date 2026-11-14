@@ -51,7 +51,7 @@ struct ht_table {
 };
 
 /* rehash 중이 아니면 tables[1] 은 비어 있고(buckets == NULL) rehash_idx 는 NOT_REHASHING 이다.
- * rehash_idx 는 tables[0] 에서 다음에 옮길 버킷 번호다 (3.2 부터 사용).
+ * rehash 중이면 tables[0] 의 rehash_idx 미만 버킷은 모두 비어 있고, 그 키들은 tables[1] 에 있다.
  * 늘리기가 실패하지 않는 한 tables[0] 의 load factor 는 1.0 이하다 */
 struct hash_table {
     struct ht_table tables[2];
@@ -72,8 +72,10 @@ static const struct ht_entry *table_random_entry(const struct ht_table *table);
 static struct ht_entry **alloc_buckets(size_t bucket_count);
 static void grow_if_needed(struct hash_table *ht);
 static void shrink_if_needed(struct hash_table *ht);
-static void resize(struct hash_table *ht, size_t new_bucket_count);
-static void move_chain(struct ht_table *dst, struct ht_entry *entry);
+static void start_rehash(struct hash_table *ht, size_t new_bucket_count);
+static void rehash_all_now(struct hash_table *ht);
+static void move_bucket(struct hash_table *ht);
+static void finish_rehash(struct hash_table *ht);
 static void replace_value(const struct hash_table *ht, struct ht_entry *entry, void *value);
 static void destroy_value(const struct hash_table *ht, void *value);
 static void destroy_entry(const struct hash_table *ht, struct ht_entry *entry);
@@ -318,7 +320,7 @@ static void grow_if_needed(struct hash_table *ht)
     const struct ht_table *main_table = &ht->tables[0];
     if (main_table->entry_count > main_table->bucket_count &&
         main_table->bucket_count <= SIZE_MAX / 2) {
-        resize(ht, main_table->bucket_count * 2);
+        start_rehash(ht, main_table->bucket_count * 2);
     }
 }
 
@@ -328,32 +330,57 @@ static void shrink_if_needed(struct hash_table *ht)
     bool is_sparse =
         main_table->entry_count * PERCENT_SCALE < main_table->bucket_count * SHRINK_FILL_PERCENT;
     if (is_sparse && main_table->bucket_count > HT_INITIAL_SIZE) {
-        resize(ht, main_table->bucket_count / 2);
+        start_rehash(ht, main_table->bucket_count / 2);
     }
 }
 
-/* 새 버킷 할당이 실패하면 크기를 그대로 둔다. 느려질 뿐 데이터는 잃지 않는다 */
-static void resize(struct hash_table *ht, size_t new_bucket_count)
+/* tables[1] 을 만들고 rehash_idx 를 0 으로 둔다. 이미 rehash 중이거나 할당이 실패하면 무시 */
+static void start_rehash(struct hash_table *ht, size_t new_bucket_count)
 {
-    struct ht_table resized;
-    if (!table_init(&resized, new_bucket_count)) {
+    if (hash_table_is_rehashing(ht)) {
         return;
     }
-    struct ht_table *main_table = &ht->tables[0];
-    for (size_t i = 0; i < main_table->bucket_count; i++) {
-        move_chain(&resized, main_table->buckets[i]);
+    if (!table_init(&ht->tables[1], new_bucket_count)) {
+        return;
     }
-    mem_free(main_table->buckets);
-    *main_table = resized;
+    ht->rehash_idx = 0;
+    rehash_all_now(ht);
 }
 
-static void move_chain(struct ht_table *dst, struct ht_entry *entry)
+/* TODO(bloro): 3.3 에서 연산마다 버킷 몇 개씩만 옮기는 rehash_step 으로 바꾼다 */
+static void rehash_all_now(struct hash_table *ht)
 {
+    while (hash_table_is_rehashing(ht)) {
+        move_bucket(ht);
+    }
+}
+
+/* tables[0] 의 rehash_idx 번 버킷을 tables[1] 로 옮기고, 마지막이면 rehash 를 끝낸다 */
+static void move_bucket(struct hash_table *ht)
+{
+    struct ht_table *src = &ht->tables[0];
+    size_t idx = (size_t)ht->rehash_idx;
+    struct ht_entry *entry = src->buckets[idx];
+    src->buckets[idx] = NULL;
     while (entry != NULL) {
         struct ht_entry *next = entry->next;
-        table_push(dst, entry, hash_table_hash(entry->key));
+        table_push(&ht->tables[1], entry, hash_table_hash(entry->key));
+        src->entry_count--;
         entry = next;
     }
+    ht->rehash_idx++;
+    if ((size_t)ht->rehash_idx == src->bucket_count) {
+        finish_rehash(ht);
+    }
+}
+
+/* 비어 버린 tables[0] 의 버킷 배열을 해제하고 tables[1] 을 tables[0] 자리로 옮긴다 */
+static void finish_rehash(struct hash_table *ht)
+{
+    mem_free(ht->tables[0].buckets);
+    ht->tables[0] = ht->tables[1];
+    ht->tables[1] = (struct ht_table){0};
+    ht->rehash_idx = NOT_REHASHING;
 }
 
 /* 같은 값 포인터로 덮어쓰면 해제하지 않는다. 해제하면 저장된 값이 바로 dangling 이 된다 */

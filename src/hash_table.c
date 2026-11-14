@@ -53,10 +53,13 @@ struct ht_table {
 
 /* rehash 중이 아니면 tables[1] 은 비어 있고(buckets == NULL) rehash_idx 는 NOT_REHASHING 이다.
  * rehash 중이면 tables[0] 의 rehash_idx 미만 버킷은 모두 비어 있고, 그 키들은 tables[1] 에 있다.
- * 늘리기가 실패하지 않는 한 tables[0] 의 load factor 는 1.0 이하다 */
+ * 늘리기가 실패하지 않는 한 tables[0] 의 load factor 는 1.0 이하다.
+ * destroy_step 중이면 지우는 중인 테이블의 clear_idx 미만 버킷은 비어 있다.
+ * 지우는 순서는 tables[0] 다음 tables[1] 이다 */
 struct hash_table {
     struct ht_table tables[2];
     long rehash_idx;
+    size_t clear_idx;
     ht_value_destroy_fn *value_destroy;
 };
 
@@ -84,6 +87,10 @@ static void finish_rehash(struct hash_table *ht);
 static void replace_value(const struct hash_table *ht, struct ht_entry *entry, void *value);
 static void destroy_value(const struct hash_table *ht, void *value);
 static void destroy_entry(const struct hash_table *ht, struct ht_entry *entry);
+static struct ht_table *next_table_to_clear(struct hash_table *ht);
+static void skip_moved_buckets(struct hash_table *ht, int table_idx);
+static void destroy_chain(const struct hash_table *ht, struct ht_table *table,
+                          struct ht_entry *head);
 static size_t random_below(size_t bound);
 static const struct ht_entry *random_in_chain(const struct ht_entry *head);
 static uint64_t load_le64(const unsigned char *bytes, size_t len);
@@ -103,6 +110,7 @@ struct hash_table *hash_table_create(ht_value_destroy_fn *value_destroy)
     }
     ht->tables[1] = (struct ht_table){0};
     ht->rehash_idx = NOT_REHASHING;
+    ht->clear_idx = 0;
     ht->value_destroy = value_destroy;
     return ht;
 }
@@ -222,6 +230,33 @@ void hash_table_rehash_for_ms(struct hash_table *ht, int64_t budget_ms)
         hash_table_rehash_step(ht, HT_REHASH_CHUNK_BUCKETS);
         if (clock_now_ms() - start_ms >= budget_ms) {
             return;
+        }
+    }
+}
+
+/* 키 100만 개를 한 번에 해제하면 이벤트 루프가 멈추므로 버킷 묶음 단위로 나눠 해제한다.
+ * 비어 버린 테이블은 남은 빈 버킷을 훑지 않고 버킷 배열을 바로 해제한다 */
+bool hash_table_destroy_step(struct hash_table *ht, size_t bucket_count)
+{
+    size_t empty_visits_left = bucket_count * HT_REHASH_EMPTY_VISITS;
+    size_t cleared_count = 0;
+    for (;;) {
+        struct ht_table *table = next_table_to_clear(ht);
+        if (table == NULL) {
+            mem_free(ht);
+            return true;
+        }
+        if (cleared_count == bucket_count) {
+            return false;
+        }
+        struct ht_entry *head = table->buckets[ht->clear_idx];
+        table->buckets[ht->clear_idx] = NULL;
+        ht->clear_idx++;
+        if (head != NULL) {
+            destroy_chain(ht, table, head);
+            cleared_count++;
+        } else if (empty_visits_left-- == 0) {
+            return false;
         }
     }
 }
@@ -490,6 +525,51 @@ static void destroy_entry(const struct hash_table *ht, struct ht_entry *entry)
     str_destroy(entry->key);
     destroy_value(ht, entry->value);
     mem_free(entry);
+}
+
+/* 엔트리가 남은 첫 테이블을 돌려준다. 비어 버린 테이블의 버킷 배열은 여기서 해제하고
+ * 다음 테이블을 처음부터 지우도록 clear_idx 를 0 으로 되돌린다. 둘 다 비었으면 NULL.
+ * 엔트리가 남아 있으면 clear_idx 이후에 비지 않은 버킷이 반드시 있다 */
+static struct ht_table *next_table_to_clear(struct hash_table *ht)
+{
+    for (int i = 0; i < 2; i++) {
+        struct ht_table *table = &ht->tables[i];
+        if (table->buckets == NULL) {
+            continue;
+        }
+        if (table->entry_count > 0) {
+            skip_moved_buckets(ht, i);
+            return table;
+        }
+        mem_free(table->buckets);
+        *table = (struct ht_table){0};
+        ht->clear_idx = 0;
+    }
+    return NULL;
+}
+
+/* rehash 중 tables[0] 의 rehash_idx 앞은 이미 옮겨져 비었으므로 그 뒤부터 지운다.
+ * 0번부터 훑으면 옮긴 칸이 빈 칸 상한보다 많을 때 한 엔트리도 해제하지 못하고 멈춘다 */
+static void skip_moved_buckets(struct hash_table *ht, int table_idx)
+{
+    if (table_idx != 0 || !hash_table_is_rehashing(ht)) {
+        return;
+    }
+    if (ht->clear_idx < (size_t)ht->rehash_idx) {
+        ht->clear_idx = (size_t)ht->rehash_idx;
+    }
+}
+
+/* 버킷에서 떼어 낸 체인의 엔트리를 모두 해제하고 entry_count 를 맞춘다 */
+static void destroy_chain(const struct hash_table *ht, struct ht_table *table,
+                          struct ht_entry *head)
+{
+    while (head != NULL) {
+        struct ht_entry *next = head->next;
+        destroy_entry(ht, head);
+        table->entry_count--;
+        head = next;
+    }
 }
 
 static size_t random_below(size_t bound)

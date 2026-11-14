@@ -17,6 +17,10 @@ enum {
     BIG_KEY_COUNT = 100000,
     KEPT_KEY_COUNT = 10,
     CHURN_KEY_COUNT = 1000,
+    DESTROY_CHUNK_BUCKETS = 10,
+    REHASH_DESTROY_KEY_COUNT = 20,
+    MID_REHASH_BUCKET_COUNT = 16384,
+    MID_REHASH_MOVED_BUCKETS = 2000,
 };
 
 /* SipHash-2-4 참조 구현의 테스트 벡터: key = 00 01 .. 0f, 메시지 = 00 01 .. (len-1) */
@@ -1148,6 +1152,111 @@ static void test_rehash_for_ms_when_not_rehashing_does_nothing(void)
     hash_table_destroy(ht);
 }
 
+/* key 가 HT_INITIAL_SIZE 칸 테이블의 마지막 칸에 떨어지면 true */
+static bool lands_in_last_bucket(const struct str *key)
+{
+    return (hash_table_hash(key) & (HT_INITIAL_SIZE - 1)) == HT_INITIAL_SIZE - 1;
+}
+
+/* 초기 테이블의 마지막 칸에 떨어지는 키를 만든다 */
+static struct str *create_last_bucket_key(void)
+{
+    for (int i = 0; i < COLLISION_SEARCH_LIMIT; i++) {
+        char buf[KEY_BUF_BYTES];
+        int len = snprintf(buf, sizeof(buf), "s:%d", i);
+        struct str *key = str_create(buf, (size_t)len);
+        if (lands_in_last_bucket(key)) {
+            return key;
+        }
+        str_destroy(key);
+    }
+    return NULL;
+}
+
+static void test_destroy_step_empty_table_finishes_first_call(void)
+{
+    size_t baseline_bytes = mem_used_bytes();
+    struct hash_table *ht = hash_table_create(NULL);
+    CHECK(hash_table_destroy_step(ht, 1));
+    CHECK(mem_used_bytes() == baseline_bytes);
+}
+
+static void test_destroy_step_small_chunks_free_gradually(void)
+{
+    size_t baseline_bytes = mem_used_bytes();
+    struct hash_table *ht = hash_table_create(ignore_value);
+    set_numbered_keys(ht, CHURN_KEY_COUNT, NULL);
+
+    size_t call_count = 1;
+    size_t prev_bytes = mem_used_bytes();
+    while (!hash_table_destroy_step(ht, DESTROY_CHUNK_BUCKETS)) {
+        CHECK(mem_used_bytes() < prev_bytes);
+        prev_bytes = mem_used_bytes();
+        call_count++;
+    }
+    CHECK(call_count > 1);
+    CHECK(mem_used_bytes() == baseline_bytes);
+}
+
+/* 17번째 키에서 늘리기가 시작되고, 그 뒤 키는 tables[1] 에 들어가 두 테이블 모두 엔트리를 가진다 */
+static void test_destroy_step_during_rehash_frees_both_tables(void)
+{
+    size_t baseline_bytes = mem_used_bytes();
+    struct hash_table *ht = hash_table_create(count_destroyed_value);
+    g_destroyed_count = 0;
+    set_numbered_keys(ht, REHASH_DESTROY_KEY_COUNT, NULL);
+    CHECK(hash_table_is_rehashing(ht));
+
+    while (!hash_table_destroy_step(ht, 1)) {
+    }
+    CHECK(g_destroyed_count == REHASH_DESTROY_KEY_COUNT);
+    CHECK(mem_used_bytes() == baseline_bytes);
+}
+
+/* 엔트리 하나가 마지막 칸(15번)에 있으면 첫 호출은 빈 칸 10개를 지나친 뒤 멈춘다 */
+static void test_destroy_step_limits_empty_bucket_visits(void)
+{
+    struct hash_table *ht = hash_table_create(ignore_value);
+    struct str *key = create_last_bucket_key();
+    CHECK(key != NULL);
+    CHECK(hash_table_set(ht, key, NULL) == HT_OK);
+
+    CHECK(!hash_table_destroy_step(ht, 1));
+    CHECK(hash_table_count(ht) == 1);
+    CHECK(hash_table_destroy_step(ht, 1));
+}
+
+/* 큰 테이블에서 버킷을 빈 칸 상한(호출당 10배)보다 많이 옮긴 뒤에도 첫 호출이 엔트리를 해제해야
+ * 한다. tables[0] 을 0번부터 훑으면 이미 옮겨 비어 버린 칸만 지나치다 멈춘다 */
+static void test_destroy_step_mid_rehash_skips_moved_buckets(void)
+{
+    size_t baseline_bytes = mem_used_bytes();
+    struct hash_table *ht = hash_table_create(ignore_value);
+    int count = 0;
+    while (hash_table_bucket_count(ht) < MID_REHASH_BUCKET_COUNT) {
+        hash_table_set(ht, create_numbered_key(count++), NULL);
+    }
+    hash_table_rehash_step(ht, MID_REHASH_MOVED_BUCKETS);
+    CHECK(hash_table_is_rehashing(ht));
+
+    size_t before_bytes = mem_used_bytes();
+    CHECK(!hash_table_destroy_step(ht, 1));
+    CHECK(mem_used_bytes() < before_bytes);
+    while (!hash_table_destroy_step(ht, DESTROY_CHUNK_BUCKETS)) {
+    }
+    CHECK(mem_used_bytes() == baseline_bytes);
+}
+
+static void test_destroy_after_partial_step_frees_rest(void)
+{
+    size_t baseline_bytes = mem_used_bytes();
+    struct hash_table *ht = hash_table_create(ignore_value);
+    set_numbered_keys(ht, CHURN_KEY_COUNT, NULL);
+    CHECK(!hash_table_destroy_step(ht, DESTROY_CHUNK_BUCKETS));
+    hash_table_destroy(ht);
+    CHECK(mem_used_bytes() == baseline_bytes);
+}
+
 static void run_create_tests(void)
 {
     RUN(test_create_returns_zero_count);
@@ -1252,6 +1361,16 @@ static void run_rehash_operation_tests(void)
     RUN(test_random_entry_during_rehash_reaches_both_tables);
 }
 
+static void run_destroy_step_tests(void)
+{
+    RUN(test_destroy_step_empty_table_finishes_first_call);
+    RUN(test_destroy_step_small_chunks_free_gradually);
+    RUN(test_destroy_step_during_rehash_frees_both_tables);
+    RUN(test_destroy_step_limits_empty_bucket_visits);
+    RUN(test_destroy_step_mid_rehash_skips_moved_buckets);
+    RUN(test_destroy_after_partial_step_frees_rest);
+}
+
 static void run_rehash_budget_tests(void)
 {
     RUN(test_rehash_for_ms_zero_budget_moves_one_chunk);
@@ -1271,6 +1390,7 @@ int main(void)
     run_rehash_step_tests();
     run_rehash_operation_tests();
     run_rehash_budget_tests();
+    run_destroy_step_tests();
     TEST_DONE();
     return 0;
 }

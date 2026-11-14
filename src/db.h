@@ -1,10 +1,15 @@
 #ifndef MINI_REDIS_DB_H
 #define MINI_REDIS_DB_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include "str.h"
+
+enum {
+    DB_FREE_CHUNK_BUCKETS = 100,
+};
 
 enum db_result {
     DB_OK = 0,
@@ -38,6 +43,16 @@ enum db_result db_delete_if_expired(struct db *db, const struct str *key, int64_
 /* TTL 이 있는 키 하나를 무작위로 반환한다. 없거나 못 찾으면 NULL.
  * 키는 db 가 소유하며 다음 변경 연산까지만 유효하다. */
 const struct str *db_random_ttl_key(const struct db *db);
+
+/* 모든 키를 지운다. 이전 테이블은 대기 목록으로 옮기고 db_free_pending_for_ms() 가 해제한다.
+ * 할당이 실패하면 아무것도 바꾸지 않고 DB_OUT_OF_MEMORY 이다. */
+enum db_result db_flush(struct db *db);
+
+/* 대기 목록의 테이블을 budget_ms 동안 해제한다. 예산이 0 이어도 버킷 한 묶음은 해제한다. */
+void db_free_pending_for_ms(struct db *db, int64_t budget_ms);
+
+/* 해제를 기다리는 테이블이 있으면 true 를 반환한다. */
+bool db_has_pending_free(const struct db *db);
 
 /* 두 테이블의 rehash 를 각각 budget_ms 동안 진행한다. 주기 작업에서 부른다. */
 void db_rehash_for_ms(struct db *db, int64_t budget_ms);

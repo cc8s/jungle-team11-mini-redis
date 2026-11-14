@@ -31,8 +31,10 @@ enum {
     PERCENT_SCALE = 100,
 };
 
-/* 불변식: bucket_count 는 2의 거듭제곱이고, entry_count 는 모든 체인의 노드 수와 같다.
- * 늘리기가 실패하지 않는 한 entry_count <= bucket_count (load factor 1.0 이하) 를 유지한다 */
+enum {
+    NOT_REHASHING = -1,
+};
+
 struct sip_state {
     uint64_t v0;
     uint64_t v1;
@@ -40,34 +42,47 @@ struct sip_state {
     uint64_t v3;
 };
 
-struct hash_table {
+/* 버킷 배열 하나. 불변식: bucket_count 는 0 이거나 2의 거듭제곱이고,
+ * entry_count 는 모든 체인의 노드 수와 같다 */
+struct ht_table {
     struct ht_entry **buckets;
     size_t bucket_count;
     size_t entry_count;
+};
+
+/* rehash 중이 아니면 tables[1] 은 비어 있고(buckets == NULL) rehash_idx 는 NOT_REHASHING 이다.
+ * rehash_idx 는 tables[0] 에서 다음에 옮길 버킷 번호다 (3.2 부터 사용).
+ * 늘리기가 실패하지 않는 한 tables[0] 의 load factor 는 1.0 이하다 */
+struct hash_table {
+    struct ht_table tables[2];
+    long rehash_idx;
     ht_value_destroy_fn *value_destroy;
 };
 
 /* 모든 테이블이 같은 seed 를 쓴다. 설정 전에는 0 으로 채워져 있다 */
 static uint8_t g_hash_seed[HT_SEED_BYTES];
 
+static bool table_init(struct ht_table *table, size_t bucket_count);
+static void table_clear(const struct hash_table *ht, struct ht_table *table);
+static inline size_t table_index(const struct ht_table *table, uint64_t hash);
+static struct ht_entry *table_find(const struct ht_table *table, const struct str *key);
+static void table_push(struct ht_table *table, struct ht_entry *entry, uint64_t hash);
+static struct ht_entry *table_unlink(struct ht_table *table, const struct str *key);
+static const struct ht_entry *table_random_entry(const struct ht_table *table);
 static struct ht_entry **alloc_buckets(size_t bucket_count);
-static void destroy_chain(const struct hash_table *ht, struct ht_entry *entry);
-static inline size_t bucket_index(const struct hash_table *ht, uint64_t hash);
-static inline size_t index_for(uint64_t hash, size_t bucket_count);
 static void grow_if_needed(struct hash_table *ht);
 static void shrink_if_needed(struct hash_table *ht);
 static void resize(struct hash_table *ht, size_t new_bucket_count);
-static void move_chain(struct ht_entry *entry, struct ht_entry **new_buckets, size_t new_count);
-static struct ht_entry *find_in_chain(struct ht_entry *entry, const struct str *key);
+static void move_chain(struct ht_table *dst, struct ht_entry *entry);
 static void replace_value(const struct hash_table *ht, struct ht_entry *entry, void *value);
 static void destroy_value(const struct hash_table *ht, void *value);
 static void destroy_entry(const struct hash_table *ht, struct ht_entry *entry);
 static size_t random_below(size_t bound);
+static const struct ht_entry *random_in_chain(const struct ht_entry *head);
 static uint64_t load_le64(const unsigned char *bytes, size_t len);
 static inline uint64_t rotl64(uint64_t x, int bits);
 static void sip_round(struct sip_state *st);
 static void sip_absorb(struct sip_state *st, uint64_t block, int rounds);
-static const struct ht_entry *random_in_chain(const struct ht_entry *head);
 
 struct hash_table *hash_table_create(ht_value_destroy_fn *value_destroy)
 {
@@ -75,13 +90,12 @@ struct hash_table *hash_table_create(ht_value_destroy_fn *value_destroy)
     if (ht == NULL) {
         return NULL;
     }
-    ht->buckets = alloc_buckets(HT_INITIAL_SIZE);
-    if (ht->buckets == NULL) {
+    if (!table_init(&ht->tables[0], HT_INITIAL_SIZE)) {
         mem_free(ht);
         return NULL;
     }
-    ht->bucket_count = HT_INITIAL_SIZE;
-    ht->entry_count = 0;
+    ht->tables[1] = (struct ht_table){0};
+    ht->rehash_idx = NOT_REHASHING;
     ht->value_destroy = value_destroy;
     return ht;
 }
@@ -91,17 +105,15 @@ void hash_table_destroy(struct hash_table *ht)
     if (ht == NULL) {
         return;
     }
-    for (size_t i = 0; i < ht->bucket_count; i++) {
-        destroy_chain(ht, ht->buckets[i]);
-    }
-    mem_free(ht->buckets);
+    table_clear(ht, &ht->tables[0]);
+    table_clear(ht, &ht->tables[1]);
     mem_free(ht);
 }
 
 enum ht_result hash_table_set(struct hash_table *ht, struct str *key, void *value)
 {
-    size_t idx = bucket_index(ht, hash_table_hash(key));
-    struct ht_entry *existing = find_in_chain(ht->buckets[idx], key);
+    struct ht_table *main_table = &ht->tables[0];
+    struct ht_entry *existing = table_find(main_table, key);
     if (existing != NULL) {
         replace_value(ht, existing, value);
         str_destroy(key);
@@ -114,65 +126,45 @@ enum ht_result hash_table_set(struct hash_table *ht, struct str *key, void *valu
     }
     entry->key = key;
     entry->value = value;
-    entry->next = ht->buckets[idx];
-    ht->buckets[idx] = entry;
-    ht->entry_count++;
+    table_push(main_table, entry, hash_table_hash(key));
     grow_if_needed(ht);
     return HT_OK;
 }
 
 const struct ht_entry *hash_table_find(const struct hash_table *ht, const struct str *key)
 {
-    size_t idx = bucket_index(ht, hash_table_hash(key));
-    return find_in_chain(ht->buckets[idx], key);
+    return table_find(&ht->tables[0], key);
 }
 
 enum ht_result hash_table_delete(struct hash_table *ht, const struct str *key)
 {
-    struct ht_entry **link = &ht->buckets[bucket_index(ht, hash_table_hash(key))];
-    while (*link != NULL && !str_equal((*link)->key, key)) {
-        link = &(*link)->next;
-    }
-    if (*link == NULL) {
+    struct ht_entry *entry = table_unlink(&ht->tables[0], key);
+    if (entry == NULL) {
         return HT_NOT_FOUND;
     }
-
-    struct ht_entry *entry = *link;
-    *link = entry->next;
     destroy_entry(ht, entry);
-    ht->entry_count--;
     shrink_if_needed(ht);
     return HT_OK;
 }
 
-/* 빈 버킷이 길게 이어져도 루프가 오래 돌지 않도록 탐색 칸 수에 상한을 둔다 */
 const struct ht_entry *hash_table_random_entry(const struct hash_table *ht)
 {
-    if (ht->entry_count == 0) {
-        return NULL;
-    }
-    size_t probe_limit = ht->bucket_count;
-    if (probe_limit > HT_RANDOM_MAX_PROBES) {
-        probe_limit = HT_RANDOM_MAX_PROBES;
-    }
-    size_t start_idx = random_below(ht->bucket_count);
-    for (size_t i = 0; i < probe_limit; i++) {
-        const struct ht_entry *head = ht->buckets[(start_idx + i) & (ht->bucket_count - 1)];
-        if (head != NULL) {
-            return random_in_chain(head);
-        }
-    }
-    return NULL;
+    return table_random_entry(&ht->tables[0]);
 }
 
 size_t hash_table_count(const struct hash_table *ht)
 {
-    return ht->entry_count;
+    return ht->tables[0].entry_count + ht->tables[1].entry_count;
 }
 
 size_t hash_table_bucket_count(const struct hash_table *ht)
 {
-    return ht->bucket_count;
+    return ht->tables[0].bucket_count;
+}
+
+bool hash_table_is_rehashing(const struct hash_table *ht)
+{
+    return ht->rehash_idx != NOT_REHASHING;
 }
 
 uint64_t hash_table_hash(const struct str *key)
@@ -223,6 +215,97 @@ enum ht_result hash_table_load_random_seed(void)
     return HT_OK;
 }
 
+static bool table_init(struct ht_table *table, size_t bucket_count)
+{
+    table->buckets = alloc_buckets(bucket_count);
+    if (table->buckets == NULL) {
+        return false;
+    }
+    table->bucket_count = bucket_count;
+    table->entry_count = 0;
+    return true;
+}
+
+/* 모든 엔트리와 버킷 배열을 해제하고 빈 테이블(buckets == NULL)로 되돌린다 */
+static void table_clear(const struct hash_table *ht, struct ht_table *table)
+{
+    for (size_t i = 0; i < table->bucket_count; i++) {
+        struct ht_entry *entry = table->buckets[i];
+        while (entry != NULL) {
+            struct ht_entry *next = entry->next;
+            destroy_entry(ht, entry);
+            entry = next;
+        }
+    }
+    mem_free(table->buckets);
+    *table = (struct ht_table){0};
+}
+
+/* bucket_count 가 2의 거듭제곱이라 나머지 연산 대신 하위 비트 마스크로 칸을 고른다 */
+static inline size_t table_index(const struct ht_table *table, uint64_t hash)
+{
+    return (size_t)(hash & (table->bucket_count - 1));
+}
+
+static struct ht_entry *table_find(const struct ht_table *table, const struct str *key)
+{
+    if (table->entry_count == 0) {
+        return NULL;
+    }
+    struct ht_entry *entry = table->buckets[table_index(table, hash_table_hash(key))];
+    while (entry != NULL && !str_equal(entry->key, key)) {
+        entry = entry->next;
+    }
+    return entry;
+}
+
+/* 체인 맨 앞에 붙인다 (O(1)) */
+static void table_push(struct ht_table *table, struct ht_entry *entry, uint64_t hash)
+{
+    size_t idx = table_index(table, hash);
+    entry->next = table->buckets[idx];
+    table->buckets[idx] = entry;
+    table->entry_count++;
+}
+
+/* key 와 같은 엔트리를 체인에서 떼어 돌려준다. 해제는 호출자가 한다. 없으면 NULL */
+static struct ht_entry *table_unlink(struct ht_table *table, const struct str *key)
+{
+    if (table->entry_count == 0) {
+        return NULL;
+    }
+    struct ht_entry **link = &table->buckets[table_index(table, hash_table_hash(key))];
+    while (*link != NULL && !str_equal((*link)->key, key)) {
+        link = &(*link)->next;
+    }
+    struct ht_entry *entry = *link;
+    if (entry != NULL) {
+        *link = entry->next;
+        table->entry_count--;
+    }
+    return entry;
+}
+
+/* 빈 버킷이 길게 이어져도 루프가 오래 돌지 않도록 탐색 칸 수에 상한을 둔다 */
+static const struct ht_entry *table_random_entry(const struct ht_table *table)
+{
+    if (table->entry_count == 0) {
+        return NULL;
+    }
+    size_t probe_limit = table->bucket_count;
+    if (probe_limit > HT_RANDOM_MAX_PROBES) {
+        probe_limit = HT_RANDOM_MAX_PROBES;
+    }
+    size_t start_idx = random_below(table->bucket_count);
+    for (size_t i = 0; i < probe_limit; i++) {
+        const struct ht_entry *head = table->buckets[(start_idx + i) & (table->bucket_count - 1)];
+        if (head != NULL) {
+            return random_in_chain(head);
+        }
+    }
+    return NULL;
+}
+
 /* 버킷은 체인 머리 포인터의 배열이라 포인터 크기로 할당하는 것이 맞다 */
 static struct ht_entry **alloc_buckets(size_t bucket_count)
 {
@@ -230,73 +313,47 @@ static struct ht_entry **alloc_buckets(size_t bucket_count)
     return mem_calloc(bucket_count, sizeof(struct ht_entry *));
 }
 
-static void destroy_chain(const struct hash_table *ht, struct ht_entry *entry)
-{
-    while (entry != NULL) {
-        struct ht_entry *next = entry->next;
-        destroy_entry(ht, entry);
-        entry = next;
-    }
-}
-
-/* bucket_count 가 2의 거듭제곱이라 나머지 연산 대신 하위 비트 마스크로 칸을 고른다 */
-static inline size_t bucket_index(const struct hash_table *ht, uint64_t hash)
-{
-    return index_for(hash, ht->bucket_count);
-}
-
-static inline size_t index_for(uint64_t hash, size_t bucket_count)
-{
-    return (size_t)(hash & (bucket_count - 1));
-}
-
 static void grow_if_needed(struct hash_table *ht)
 {
-    if (ht->entry_count > ht->bucket_count && ht->bucket_count <= SIZE_MAX / 2) {
-        resize(ht, ht->bucket_count * 2);
+    const struct ht_table *main_table = &ht->tables[0];
+    if (main_table->entry_count > main_table->bucket_count &&
+        main_table->bucket_count <= SIZE_MAX / 2) {
+        resize(ht, main_table->bucket_count * 2);
     }
 }
 
 static void shrink_if_needed(struct hash_table *ht)
 {
-    bool is_sparse = ht->entry_count * PERCENT_SCALE < ht->bucket_count * SHRINK_FILL_PERCENT;
-    if (is_sparse && ht->bucket_count > HT_INITIAL_SIZE) {
-        resize(ht, ht->bucket_count / 2);
+    const struct ht_table *main_table = &ht->tables[0];
+    bool is_sparse =
+        main_table->entry_count * PERCENT_SCALE < main_table->bucket_count * SHRINK_FILL_PERCENT;
+    if (is_sparse && main_table->bucket_count > HT_INITIAL_SIZE) {
+        resize(ht, main_table->bucket_count / 2);
     }
 }
 
 /* 새 버킷 할당이 실패하면 크기를 그대로 둔다. 느려질 뿐 데이터는 잃지 않는다 */
 static void resize(struct hash_table *ht, size_t new_bucket_count)
 {
-    struct ht_entry **new_buckets = alloc_buckets(new_bucket_count);
-    if (new_buckets == NULL) {
+    struct ht_table resized;
+    if (!table_init(&resized, new_bucket_count)) {
         return;
     }
-    for (size_t i = 0; i < ht->bucket_count; i++) {
-        move_chain(ht->buckets[i], new_buckets, new_bucket_count);
+    struct ht_table *main_table = &ht->tables[0];
+    for (size_t i = 0; i < main_table->bucket_count; i++) {
+        move_chain(&resized, main_table->buckets[i]);
     }
-    mem_free(ht->buckets);
-    ht->buckets = new_buckets;
-    ht->bucket_count = new_bucket_count;
+    mem_free(main_table->buckets);
+    *main_table = resized;
 }
 
-static void move_chain(struct ht_entry *entry, struct ht_entry **new_buckets, size_t new_count)
+static void move_chain(struct ht_table *dst, struct ht_entry *entry)
 {
     while (entry != NULL) {
         struct ht_entry *next = entry->next;
-        size_t idx = index_for(hash_table_hash(entry->key), new_count);
-        entry->next = new_buckets[idx];
-        new_buckets[idx] = entry;
+        table_push(dst, entry, hash_table_hash(entry->key));
         entry = next;
     }
-}
-
-static struct ht_entry *find_in_chain(struct ht_entry *entry, const struct str *key)
-{
-    while (entry != NULL && !str_equal(entry->key, key)) {
-        entry = entry->next;
-    }
-    return entry;
 }
 
 /* 같은 값 포인터로 덮어쓰면 해제하지 않는다. 해제하면 저장된 값이 바로 dangling 이 된다 */

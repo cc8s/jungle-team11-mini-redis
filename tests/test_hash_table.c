@@ -772,6 +772,24 @@ static void test_grow_and_shrink_does_not_leak(void)
     CHECK(mem_used_bytes() == before_bytes);
 }
 
+static void test_create_is_not_rehashing(void)
+{
+    struct hash_table *ht = hash_table_create(ignore_value);
+    CHECK(!hash_table_is_rehashing(ht));
+    hash_table_destroy(ht);
+}
+
+static void test_grow_and_shrink_leave_table_not_rehashing(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    set_numbered_keys(ht, CHURN_KEY_COUNT, &value);
+    CHECK(!hash_table_is_rehashing(ht));
+    delete_numbered_keys(ht, 0, CHURN_KEY_COUNT);
+    CHECK(!hash_table_is_rehashing(ht));
+    hash_table_destroy(ht);
+}
+
 static void run_create_tests(void)
 {
     RUN(test_create_returns_zero_count);
@@ -846,6 +864,12 @@ static void run_resize_tests(void)
     RUN(test_grow_and_shrink_does_not_leak);
 }
 
+static void run_two_table_tests(void)
+{
+    RUN(test_create_is_not_rehashing);
+    RUN(test_grow_and_shrink_leave_table_not_rehashing);
+}
+
 int main(void)
 {
     run_create_tests();
@@ -854,6 +878,7 @@ int main(void)
     run_delete_tests();
     run_random_entry_tests();
     run_resize_tests();
+    run_two_table_tests();
     TEST_DONE();
     return 0;
 }

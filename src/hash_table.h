@@ -1,6 +1,7 @@
 #ifndef MINI_REDIS_HASH_TABLE_H
 #define MINI_REDIS_HASH_TABLE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -54,6 +55,9 @@ size_t hash_table_count(const struct hash_table *ht);
 
 /* 버킷 배열의 크기를 반환한다. */
 size_t hash_table_bucket_count(const struct hash_table *ht);
+
+/* 두 번째 테이블로 엔트리를 옮기는 중이면 true 를 반환한다. */
+bool hash_table_is_rehashing(const struct hash_table *ht);
 
 /* 키의 모든 바이트로 seed 를 넣은 SipHash-2-4 를 계산한다. 같은 seed 면 같은 값이다. */
 uint64_t hash_table_hash(const struct str *key);

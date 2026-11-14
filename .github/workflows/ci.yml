@@ -13,6 +13,8 @@ jobs:
       - run: make
       - run: make test
       - run: make itest
+      - run: python3 -m pip install --user redis==6.4.0
+      - run: make demotest
 
   asan:
     runs-on: ubuntu-22.04

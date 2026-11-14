@@ -7,6 +7,8 @@
   - 비교 규칙
       KEYS          순서가 해시 순서라 정해져 있지 않다 → 정렬해서 비교
       PTTL          두 서버에 보내는 시각이 조금 다르다 → 50ms 까지 차이 허용
+      모르는 명령    인자가 없을 때 Redis 8.0 은 ", with args beginning with: " 를 붙이고 8.10 은 붙이지 않는다
+                    (진짜 Redis 버전 차이. 로컬 Ubuntu 8.0.5, CI 공식 저장소 8.10.3) → 이 꼬리를 떼고 비교
   - 일부러 비교하지 않는 것(우리는 접속용 최소 응답만 함, R007 D3): COMMAND, CONFIG, CLIENT, SELECT 1 이상
 테스트 ID: TC-DIFF-<번호>
 """
@@ -95,7 +97,9 @@ def compare(label, args, a, b):
     """a = 진짜 Redis, b = mini-redis 의 (raw, 값)"""
     global passed
     name = (args[0] if isinstance(args[0], str) else args[0].decode()).upper() if args else ""
-    ok = a[0] == b[0]
+    tail = b", with args beginning with: \r\n"
+    norm = lambda raw: raw[: -len(tail)] + b"\r\n" if raw.startswith(b"-ERR unknown command") and raw.endswith(tail) else raw  # noqa: E731
+    ok = norm(a[0]) == norm(b[0])
     if not ok and name == "KEYS" and isinstance(a[1], list) and isinstance(b[1], list):
         ok = sorted(a[1]) == sorted(b[1])
     if not ok and name == "PTTL" and a[0][:1] == b[0][:1] == b":":

@@ -21,6 +21,22 @@ make test itest difftest demotest        # 단위 · 통합 · 진짜 Redis 와 
 
 옵션: `--maxmemory 100mb --maxmemory-policy noeviction|allkeys-random`
 
+### 웹 인스펙터
+
+```bash
+./mini-redis --port 6379 &
+make inspector                           # → http://localhost:8080
+```
+
+브라우저에서 명령을 보내고, 그 명령이 **어떤 바이트로 오가고 해시 테이블 안에 어떻게 저장되는지** 바로 본다.
+
+- **보내기**: redis-cli 같은 콘솔 · SET 옵션 폼(EX/PX/NX/XX, 보낼 RESP 바이트 미리보기) · 원본 바이트 직접 입력(`\r\n` 이스케이프, 반쪽만 보내기, 파이프라이닝, 프로토콜 오류)
+- **주고받은 바이트**: 머리줄(`*3`, `$5`) · 내용 · `\r\n` 을 색으로 나눠 보여 주고, 명령마다 무엇이 바뀌었는지(키 추가·삭제, rehashidx) 적는다
+- **저장 상태**: 키·값·남은 TTL, 그리고 `main`·`expires` 두 해시 테이블의 버킷과 체인. rehash 중이면 ht[0] 에서 이미 옮긴 버킷과 다음 차례를 표시한다
+- **실험**: 능동 rehash 를 끄고 한 칸씩 옮기기 · 짧은 TTL 로 만료 관찰 · 키 대량 입력
+
+브라우저는 TCP 에 직접 붙을 수 없어서 `inspector/server.py`(Python 표준 라이브러리)가 HTTP ↔ RESP 를 중계한다. 화면은 인스펙터 전용 명령 `DEBUG HT` 로 읽는데, 이 명령은 **rehash 도 lazy 만료도 일으키지 않는다**. 보는 행위가 상태를 바꾸지 않게 하기 위해서다.
+
 ## 아키텍처
 
 ```mermaid
@@ -110,11 +126,12 @@ hash("name") % 8 = 5  →  buckets[5] 로 바로 이동 (O(1))
 
 | 레벨 | 무엇을 | 수 |
 |---|---|---|
-| 단위 (`make test`) | 해시 테이블 24, RESP 18, 버퍼 6, 키 공간 17, 만료 6, 명령 14 | **85** (검사 약 16만 개) |
+| 단위 (`make test`) | 해시 테이블 24, RESP 18, 버퍼 6, 키 공간 17, 만료 6, 명령 17 | **88** (검사 약 16만 개) |
 | 메모리 (`make asan`) | 위 전부를 AddressSanitizer + UBSan 으로 | CI |
 | 통합 (`make itest`) | 진짜 서버 프로세스: 1바이트씩 분할, 파이프라인 1만 개, 프로토콜 오류, 동시 50연결 × 1000키, 공정성, 출력 상한 | 6 |
 | **차등** (`make difftest`) | 같은 명령을 **진짜 Redis 와 mini-redis 에 보내 응답 바이트 비교**: 시나리오 9, 원시 프로토콜 8, 무작위 2000 | **2129 비교** |
 | 기능 (`make demotest`) | 데모 API: MISS→HIT, PUT 무효화, TTL 안전망, 스탬피드, 캐시 다운 | 8 |
+| 인스펙터 (`make inspectortest`) | 브리지 API: 바이트 구조 나누기, 상태 조회가 rehash 를 진행시키지 않음, 나눠 보내기, 파이프라이닝, 프로토콜 오류 후 재연결, 대량 입력, 서버 다운 | 9 |
 
 엣지 케이스 예: rehash 도중 이미 옮긴 자리의 새 키 · 만료 시각과 정확히 같은 순간(아직 살아 있음) · `$5\r\nhel` 처럼 머리줄만 온 원소 · 값 안의 `\r\n`·`\0` · 길이 숫자 넘침 · 명령 5개를 무작위 조각 500가지로 쪼개 보내기(속성 테스트) · 읽지 않는 클라이언트(출력 64MB 넘으면 끊음).
 
@@ -143,7 +160,7 @@ hash("name") % 8 = 5  →  buckets[5] 로 바로 이동 (O(1))
 
 ## 실제 Redis 와의 차이 · 한계
 
-- 자료형은 문자열만. 명령은 `PING ECHO SET(EX·PX·NX·XX) GET DEL EXISTS EXPIRE PEXPIRE TTL PTTL PERSIST KEYS FLUSHALL` + 접속용 최소 응답(`COMMAND`, `CONFIG GET`, `CLIENT`, `SELECT 0`).
+- 자료형은 문자열만. 명령은 `PING ECHO SET(EX·PX·NX·XX) GET DEL EXISTS EXPIRE PEXPIRE TTL PTTL PERSIST KEYS FLUSHALL` + 접속용 최소 응답(`COMMAND`, `CONFIG GET`, `CLIENT`, `SELECT 0`). `DEBUG` 는 이름만 Redis 와 같고 인스펙터 전용(`HT`, `REHASHSTEP`, `ACTIVEREHASH`)이다.
 - `KEYS` 는 O(N) 이라 키가 많으면 서버 전체를 막는다. 진짜 Redis 는 `SCAN` 을 권한다(미구현).
 - 영속화(AOF·RDB) 없음 — 재시작하면 데이터가 사라진다. 계획: AOF(매초 fsync, 만료는 절대 시각으로 기록), RDB 스냅샷.
 - 내보내기는 무작위만(진짜 Redis 는 LRU·LFU 도 샘플링으로 근사). 출력 버퍼 상한에 시간 조건(N초 이상 초과)은 없다.

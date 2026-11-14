@@ -261,13 +261,122 @@ static int cmd_select(db *d, resp_cmd *c, buf *out)
     return 0;
 }
 
+/* ---- DEBUG: 웹 인스펙터용 (진짜 Redis 의 DEBUG 와 이름만 같고 내용은 다름) ----
+ *
+ * DEBUG HT main|expires [maxbuckets]   해시 테이블 내부를 그대로 보여 준다. 읽기 전용: rehash 도, lazy 만료도 일으키지 않는다
+ *   응답: [ "now_ms", n, "used_memory", n, "maxmemory", n, "evicted", n, "active_rehash", 0|1,
+ *           "rehashidx", n, "tables", [ ht0, ht1 ] ]
+ *   ht  = [ 버킷 수, 키 수, [ 버킷0, 버킷1, ... ] ]   (앞에서 maxbuckets 개까지만, 기본 1024)
+ *   버킷 = [ 엔트리, ... ]                            (체인 순서 그대로)
+ *   엔트리 = [ 키, 값 ] (main) 또는 [ 키, 만료 시각 ms ] (expires). 키·값은 앞 DEBUG_SHOW_BYTES 바이트만
+ * DEBUG REHASHSTEP main|expires n      rehash 를 n 칸 진행하고 rehashidx 를 돌려준다
+ * DEBUG ACTIVEREHASH on|off            cron 의 rehash 를 켜고 끈다 (끄면 옮기는 도중을 관찰할 수 있다) */
+
+#define DEBUG_SHOW_BYTES 256
+#define DEBUG_MAX_BUCKETS 65536
+
+static dict *debug_dict(db *d, resp_cmd *c, int i)
+{
+    if (arg_eq(c, i, "main"))
+        return d->main;
+    if (arg_eq(c, i, "expires"))
+        return d->expires;
+    return NULL;
+}
+
+static size_t show_len(size_t n)
+{
+    return n < DEBUG_SHOW_BYTES ? n : DEBUG_SHOW_BYTES;
+}
+
+static void debug_table(buf *out, const table *t, int is_expires, long maxb)
+{
+    long n = t->size < (size_t)maxb ? (long)t->size : maxb;
+    resp_array_len(out, 3);
+    resp_int(out, (long long)t->size);
+    resp_int(out, (long long)t->used);
+    resp_array_len(out, n);
+    for (long i = 0; i < n; i++) {
+        long len = 0;
+        for (entry *e = t->buckets[i]; e != NULL; e = e->next)
+            len++;
+        resp_array_len(out, len);
+        for (entry *e = t->buckets[i]; e != NULL; e = e->next) {
+            resp_array_len(out, 2);
+            resp_bulk(out, e->key, show_len(e->keylen));
+            if (is_expires) {
+                int64_t when;
+                memcpy(&when, e->val, sizeof when);
+                resp_int(out, when);
+            } else {
+                resp_bulk(out, e->val, show_len(e->vallen));
+            }
+        }
+    }
+}
+
+static int cmd_debug(db *d, resp_cmd *c, buf *out)
+{
+    long long n;
+    dict *t;
+    if (arg_eq(c, 1, "ht") && (c->argc == 3 || c->argc == 4)) {
+        if ((t = debug_dict(d, c, 2)) == NULL) {
+            resp_error(out, "ERR DEBUG HT target must be 'main' or 'expires'");
+            return 0;
+        }
+        n = 1024;
+        if (c->argc == 4 && (to_ll(c->argv[3], c->argvlen[3], &n) < 0 || n < 1 || n > DEBUG_MAX_BUCKETS)) {
+            resp_error(out, "ERR maxbuckets must be between 1 and 65536");
+            return 0;
+        }
+        resp_array_len(out, 14);
+        resp_bulk(out, "now_ms", 6);
+        resp_int(out, now_ms());
+        resp_bulk(out, "used_memory", 11);
+        resp_int(out, (long long)d->used);
+        resp_bulk(out, "maxmemory", 9);
+        resp_int(out, (long long)d->maxmemory);
+        resp_bulk(out, "evicted", 7);
+        resp_int(out, (long long)d->evicted);
+        resp_bulk(out, "active_rehash", 13);
+        resp_int(out, d->active_rehash);
+        resp_bulk(out, "rehashidx", 9);
+        resp_int(out, t->rehashidx);
+        resp_bulk(out, "tables", 6);
+        resp_array_len(out, 2);
+        debug_table(out, &t->ht[0], t == d->expires, (long)n);
+        debug_table(out, &t->ht[1], t == d->expires, (long)n);
+        return 0;
+    }
+    if (arg_eq(c, 1, "rehashstep") && c->argc == 4) {
+        if ((t = debug_dict(d, c, 2)) == NULL) {
+            resp_error(out, "ERR DEBUG REHASHSTEP target must be 'main' or 'expires'");
+            return 0;
+        }
+        if (to_ll(c->argv[3], c->argvlen[3], &n) < 0 || n < 1 || n > 1000000) {
+            resp_error(out, "ERR steps must be between 1 and 1000000");
+            return 0;
+        }
+        dict_rehash_step(t, (int)n);
+        resp_int(out, t->rehashidx);
+        return 0;
+    }
+    if (arg_eq(c, 1, "activerehash") && c->argc == 3 && (arg_eq(c, 2, "on") || arg_eq(c, 2, "off"))) {
+        d->active_rehash = arg_eq(c, 2, "on");
+        resp_simple(out, "OK");
+        return 0;
+    }
+    resp_error(out, "ERR unknown DEBUG subcommand. Try HT, REHASHSTEP, ACTIVEREHASH");
+    return 0;
+}
+
 static const command TABLE[] = {
     {"ping", -1, cmd_ping},       {"echo", 2, cmd_ping},        {"set", -3, cmd_set},         {"get", 2, cmd_get},
     {"del", -2, cmd_del},         {"exists", -2, cmd_exists},   {"expire", 3, cmd_expire},
     {"pexpire", 3, cmd_pexpire},  {"ttl", 2, cmd_ttl},          {"pttl", 2, cmd_pttl},
     {"persist", 2, cmd_persist},  {"keys", 2, cmd_keys},        {"flushall", -1, cmd_flushall},
     {"command", -1, cmd_empty_array}, {"config", -2, cmd_empty_array}, {"client", -2, cmd_ok},
-    {"select", 2, cmd_select},
+    {"select", 2, cmd_select},    {"debug", -3, cmd_debug},
 };
 
 int cmd_execute(db *d, resp_cmd *c, buf *out)

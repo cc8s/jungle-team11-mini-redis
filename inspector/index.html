@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mini-redis inspector</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --line: #e3e6eb; --text: #1d2330; --muted: #6b7385;
+  --accent: #c8372d; --accent-soft: #fbe9e7;
+  --head: #1f5fbf; --head-bg: #e6eefb; --data: #18794e; --data-bg: #e3f4ea;
+  --crlf: #8a8f9c; --inline: #7a3fb8; --inline-bg: #f1e9fb; --rest: #b45309; --rest-bg: #fdf0dc;
+  --err: #c8372d; --ok: #18794e; --warn: #b45309;
+  --moved: #eef0f3; --next: #fff4d6; --flash: #fff1a8;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "D2Coding", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151b; --panel: #1a1e26; --line: #2b313d; --text: #e4e7ee; --muted: #8d95a8;
+    --accent: #ff6b5e; --accent-soft: #3a2220;
+    --head: #7fb0ff; --head-bg: #1d2a42; --data: #5fd39a; --data-bg: #173326;
+    --crlf: #6c7384; --inline: #c49bff; --inline-bg: #2b2140; --rest: #f5a54a; --rest-bg: #3a2a14;
+    --err: #ff7b6e; --ok: #5fd39a; --warn: #f5a54a;
+    --moved: #222731; --next: #3b3216; --flash: #4a4416;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 16px; margin: 0; letter-spacing: -0.01em; }
+header h1 b { color: var(--accent); }
+.pill { font: 12px var(--mono); padding: 3px 10px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+.pill.ok { color: var(--ok); border-color: currentColor; }
+.pill.down { color: var(--err); border-color: currentColor; }
+.spacer { flex: 1; }
+label.tog { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; cursor: pointer; }
+main { display: grid; grid-template-columns: minmax(360px, 5fr) minmax(420px, 7fr); gap: 16px; padding: 16px 20px; align-items: start; }
+@media (max-width: 960px) { main { grid-template-columns: 1fr; padding: 12px 16px; } }
+section.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 16px; min-width: 0; }
+.card > h2 { font-size: 13px; margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
+.card > h2 small { font-weight: normal; color: var(--muted); }
+.body { padding: 12px 14px; }
+.tabs { display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--line); }
+.tabs button { border: 0; background: none; color: var(--muted); padding: 7px 12px; border-bottom: 2px solid transparent; cursor: pointer; font: inherit; }
+.tabs button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.pane { display: none; }
+.pane.on { display: block; }
+input, select, textarea, button { font: inherit; color: inherit; }
+input[type=text], input[type=number], select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; min-width: 0; }
+textarea { width: 100%; font-family: var(--mono); font-size: 13px; resize: vertical; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 5px 11px; cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.small { padding: 2px 8px; font-size: 12px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.row > .grow { flex: 1; }
+.console { display: flex; gap: 8px; }
+.console input { flex: 1; font-family: var(--mono); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.preview { margin-top: 10px; padding: 8px 10px; background: var(--bg); border-radius: 6px; font: 12.5px/1.7 var(--mono); word-break: break-all; }
+fieldset { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; margin: 0; }
+legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
+/* 바이트 */
+.bytes { font: 12.5px/1.75 var(--mono); word-break: break-all; }
+.seg { border-radius: 3px; padding: 1px 1px; }
+.seg.head { color: var(--head); background: var(--head-bg); }
+.seg.data { color: var(--data); background: var(--data-bg); }
+.seg.inline { color: var(--inline); background: var(--inline-bg); }
+.seg.rest { color: var(--rest); background: var(--rest-bg); outline: 1px dashed var(--rest); }
+.seg.crlf { color: var(--crlf); }
+.esc, code { font-family: var(--mono); }
+.esc { color: var(--crlf); font-size: 11px; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.legend span.seg { font-family: var(--mono); }
+/* 로그 */
+#log { max-height: 70vh; overflow: auto; }
+.ex { border-bottom: 1px solid var(--line); padding: 10px 14px; }
+.ex:last-child { border-bottom: 0; }
+.ex .top { display: flex; gap: 10px; align-items: baseline; font-size: 12px; color: var(--muted); }
+.ex .top b { color: var(--text); font: 600 13px var(--mono); }
+.dir { display: grid; grid-template-columns: 22px 1fr; gap: 4px; margin-top: 6px; }
+.dir .arrow { color: var(--muted); font: 12px var(--mono); padding-top: 2px; }
+.reply { font: 12.5px/1.6 var(--mono); white-space: pre-wrap; word-break: break-all; margin-top: 6px; padding: 6px 8px; border-left: 3px solid var(--line); }
+.reply.error { border-left-color: var(--err); color: var(--err); }
+.flag { font-size: 12px; margin-top: 6px; color: var(--warn); }
+.changes { font-size: 12px; margin-top: 6px; color: var(--muted); }
+.changes b { color: var(--text); font-weight: 600; }
+.empty { color: var(--muted); padding: 18px 14px; font-size: 13px; }
+/* 상태 */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.stat { background: var(--bg); border-radius: 8px; padding: 8px 10px; }
+.stat .k { font-size: 11px; color: var(--muted); }
+.stat .v { font: 600 18px var(--mono); }
+.stat .s { font-size: 11px; color: var(--muted); }
+.bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 4px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); }
+table.keys { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.keys th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+table.keys td { padding: 5px 8px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12.5px; vertical-align: top; word-break: break-all; }
+table.keys tr.flash td { background: var(--flash); transition: background 1.5s; }
+.tscroll { max-height: 320px; overflow: auto; }
+.ttl.dead { color: var(--err); }
+.loc { color: var(--muted); }
+/* 해시 테이블 */
+.htwrap { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 600px) { .htwrap { grid-template-columns: 1fr; } }
+.ht h3 { font: 600 13px var(--mono); margin: 0 0 6px; }
+.ht h3 small { font: 12px system-ui, sans-serif; color: var(--muted); font-weight: normal; }
+.ht.off { opacity: .45; }
+.buckets { max-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+.bk { display: grid; grid-template-columns: 44px 1fr; border-bottom: 1px solid var(--line); min-height: 28px; }
+.bk:last-child { border-bottom: 0; }
+.bk .i { font: 11px var(--mono); color: var(--muted); padding: 6px 6px; border-right: 1px solid var(--line); text-align: right; }
+.bk .chain { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 6px; align-items: center; }
+.bk.moved { background: var(--moved); }
+.bk.moved .chain::before { content: "옮김"; font-size: 11px; color: var(--muted); }
+.bk.next { background: var(--next); }
+.bk.next .i::after { content: " ←"; color: var(--warn); }
+.node { font: 12px var(--mono); padding: 1px 7px; border-radius: 4px; background: var(--head-bg); color: var(--head); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.node.exp { background: var(--rest-bg); color: var(--rest); }
+.node.flash { outline: 2px solid var(--warn); }
+.node + .node::before { content: "→ "; color: var(--muted); }
+.arrowsep { color: var(--muted); font-size: 11px; }
+.banner { margin: 12px 20px 0; padding: 10px 14px; border-radius: 8px; background: var(--accent-soft); color: var(--err); display: none; }
+.banner.on { display: block; }
+.scen { display: grid; gap: 10px; }
+.scen > div { background: var(--bg); border-radius: 8px; padding: 10px 12px; }
+.scen h4 { margin: 0 0 4px; font-size: 13px; }
+.scen p { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><b>mini-redis</b> inspector</h1>
+  <span id="conn" class="pill">연결 확인 중</span>
+  <span class="spacer"></span>
+  <label class="tog"><input type="checkbox" id="auto" checked> 1초마다 새로고침</label>
+  <label class="tog" title="끄면 cron 이 rehash 를 대신 끝내지 않아서, 명령이 올 때마다 한 칸씩 옮기는 모습을 볼 수 있다"><input type="checkbox" id="activeRehash" checked> 능동 rehash (cron)</label>
+  <label class="tog">버킷 <select id="maxb"><option>64</option><option selected>256</option><option>1024</option><option>4096</option></select>개까지</label>
+</header>
+<div id="banner" class="banner"></div>
+
+<main>
+  <div>
+    <section class="card">
+      <div class="tabs" id="tabs">
+        <button data-tab="console" class="on">콘솔</button>
+        <button data-tab="form">SET 폼</button>
+        <button data-tab="raw">원본 바이트</button>
+        <button data-tab="lab">실험</button>
+      </div>
+
+      <div class="pane body on" id="pane-console">
+        <form class="console" id="consoleForm">
+          <input type="text" id="cmd" placeholder='SET name "cc8s" EX 60' autocomplete="off" spellcheck="false">
+          <button class="btn primary">보내기</button>
+        </form>
+        <div class="chips">
+          <button class="btn small" data-cmd="PING">PING</button>
+          <button class="btn small" data-cmd="KEYS *">KEYS *</button>
+          <button class="btn small" data-cmd="GET name">GET name</button>
+          <button class="btn small" data-cmd="TTL name">TTL name</button>
+          <button class="btn small" data-cmd="DEL name">DEL name</button>
+          <button class="btn small" data-cmd="FLUSHALL">FLUSHALL</button>
+        </div>
+        <p class="hint">redis-cli 처럼 공백으로 인자를 나눈다. 공백이 든 값은 "따옴표"로. ↑ ↓ 로 이전 명령.</p>
+        <div class="preview" id="cmdPreview"></div>
+      </div>
+
+      <div class="pane body" id="pane-form">
+        <div class="row"><input type="text" id="fKey" class="grow" placeholder="키" value="user:1"><input type="text" id="fVal" class="grow" placeholder="값" value="cc8s"></div>
+        <div class="row">
+          <fieldset><legend>만료</legend>
+            <label><input type="radio" name="fExp" value="" checked> 없음</label>
+            <label><input type="radio" name="fExp" value="EX"> EX(초)</label>
+            <label><input type="radio" name="fExp" value="PX"> PX(ms)</label>
+            <input type="number" id="fAmt" value="10" style="width:80px">
+          </fieldset>
+          <fieldset><legend>조건</legend>
+            <label><input type="radio" name="fCond" value="" checked> 항상</label>
+            <label><input type="radio" name="fCond" value="NX"> NX(없을 때만)</label>
+            <label><input type="radio" name="fCond" value="XX"> XX(있을 때만)</label>
+          </fieldset>
+        </div>
+        <div class="row">
+          <button class="btn primary" id="fSet">SET</button>
+          <button class="btn" id="fGet">GET</button>
+          <button class="btn" id="fTtl">PTTL</button>
+          <button class="btn" id="fDel">DEL</button>
+          <button class="btn" id="fPersist">PERSIST</button>
+        </div>
+        <div class="preview" id="formPreview"></div>
+      </div>
+
+      <div class="pane body" id="pane-raw">
+        <textarea id="raw" rows="4" spellcheck="false">*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$5\r\nhello\r\n</textarea>
+        <p class="hint">입력한 그대로 TCP 로 보낸다. <code>\r</code> <code>\n</code> <code>\t</code> <code>\\</code> <code>\xHH</code> 는 바이트로 바꾼다. 연결은 이어진 채라서 반쪽만 보내고 나머지를 나중에 보낼 수 있다.</p>
+        <div class="row">
+          <button class="btn primary" id="rawSend">바이트 보내기</button>
+          <button class="btn" id="reconnect" title="받다 만 응답도 버린다">연결 새로 열기</button>
+        </div>
+        <div class="chips">
+          <button class="btn small" data-raw="PING\r\n">inline 명령</button>
+          <button class="btn small" data-raw="*1\r\n$4\r\nPING\r\n*2\r\n$4\r\nECHO\r\n$2\r\nhi\r\n*2\r\n$3\r\nGET\r\n$1\r\nk\r\n">파이프라이닝 3개</button>
+          <button class="btn small" data-raw="*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$5\r\nhel">나눠 보내기 ① 앞부분</button>
+          <button class="btn small" data-raw="lo\r\n">나눠 보내기 ② 뒷부분</button>
+          <button class="btn small" data-raw="*1\r\n$x\r\n">프로토콜 오류</button>
+          <button class="btn small" data-raw="*2\r\n$3\r\nGET\r\n$3\r\n\xec\x95\x88\r\n">한글 키 (UTF-8 3바이트)</button>
+        </div>
+        <div class="preview" id="rawPreview"></div>
+      </div>
+
+      <div class="pane body" id="pane-lab">
+        <div class="scen">
+          <div>
+            <h4>① 점진적 rehash 를 한 칸씩 보기</h4>
+            <p>능동 rehash 를 끄고, 비운 뒤 키 5개를 넣는다. 키가 4개(버킷 4개)를 채운 다음 5번째에서 ht[1](버킷 8개)이 생긴다. 그다음 아무 명령이나 보내면 한 칸씩 옮겨진다.</p>
+            <div class="row"><button class="btn primary" id="labRehash">준비하기</button>
+              <button class="btn" data-step="1">한 칸 옮기기</button><button class="btn" data-step="100">끝까지</button>
+              <button class="btn" data-cmd="GET k1">GET k1 (한 칸 + 조회)</button></div>
+          </div>
+          <div>
+            <h4>② 만료: lazy 와 active</h4>
+            <p>3초짜리 키를 만든다. 표의 TTL 이 0 을 지나면 '만료됨'으로 바뀌고, 100ms 마다 도는 active 만료가 곧 지운다. 능동 rehash 와 상관없이 만료는 계속 돈다.</p>
+            <div class="row"><button class="btn primary" data-cmd="SET temp bye PX 3000">SET temp bye PX 3000</button><button class="btn" data-cmd="PTTL temp">PTTL temp</button><button class="btn" data-cmd="GET temp">GET temp</button></div>
+          </div>
+          <div>
+            <h4>③ 키 많이 넣기</h4>
+            <p>별도 연결로 SET 을 파이프라이닝해서 넣는다(로그에는 요약만). 버킷 수가 2배씩 커지는 것과 체인 길이를 본다.</p>
+            <div class="row"><input type="text" id="fillPrefix" value="key:" style="width:90px"><input type="number" id="fillN" value="100" style="width:90px"> 개
+              <input type="number" id="fillTtl" value="0" style="width:90px"> ms TTL(0=없음)
+              <button class="btn primary" id="fill">넣기</button></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>주고받은 바이트 <small>최근 것이 위</small><span class="spacer"></span><button class="btn small" id="clearLog">지우기</button></h2>
+      <div class="body legend">
+        <span><span class="seg head">*3 $3</span> 머리줄</span>
+        <span><span class="seg data">SET</span> 내용</span>
+        <span><span class="seg inline">PING</span> inline</span>
+        <span><span class="seg rest">$5 hel</span> 아직 덜 옴</span>
+        <span><span class="esc">\r\n</span> 줄 끝</span>
+      </div>
+      <div id="log"><div class="empty">아직 보낸 명령이 없다. 위에서 명령을 보내 보자.</div></div>
+    </section>
+  </div>
+
+  <div>
+    <section class="card">
+      <h2>키 공간 <small id="nowLabel"></small></h2>
+      <div class="body"><div class="stats" id="stats"></div></div>
+    </section>
+
+    <section class="card">
+      <h2>저장된 키 <small>main 과 expires 를 합쳐서. DEBUG HT 로 읽어 rehash 도 lazy 만료도 일으키지 않는다</small></h2>
+      <div class="tscroll"><table class="keys"><thead><tr><th>키</th><th>값</th><th>TTL</th><th>위치</th></tr></thead><tbody id="keys"></tbody></table></div>
+    </section>
+
+    <section class="card">
+      <div class="tabs" id="htTabs">
+        <button data-ht="main" class="on">해시 테이블 main (키 → 값)</button>
+        <button data-ht="expires">expires (키 → 만료 시각)</button>
+      </div>
+      <div class="body">
+        <p class="hint" id="htNote" style="margin:0 0 10px"></p>
+        <div class="htwrap" id="ht"></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const enc = new TextEncoder();
+
+let state = null;        // 마지막 /api/state
+let prevKeys = new Map(); // 직전 키 → 값 (변화 표시용)
+let flashKeys = new Set();
+let clockSkew = 0;       // 서버 now_ms - 브라우저 시계
+let htView = "main";
+let pendingChange = null; // 방금 보낸 요청의 로그 칸과 보내기 직전 상태. 보낸 뒤에 시작한 새로고침에서 변화를 적는다
+let seq = 0, applied = 0; // 새로고침 순번. 1초 자동 새로고침과 겹쳐 늦게 온 옛 응답은 버린다
+function markChange(el) { pendingChange = { el, after: seq, keys: prevKeys, st: state }; }
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return r.json();
+}
+
+/* ---- 명령줄 → 인자 (redis-cli 와 비슷하게) ---- */
+function splitArgs(line) {
+  const out = [];
+  let i = 0;
+  while (i < line.length) {
+    while (i < line.length && /\s/.test(line[i])) i++;
+    if (i >= line.length) break;
+    let cur = "";
+    if (line[i] === '"') {
+      i++;
+      while (i < line.length && line[i] !== '"') {
+        if (line[i] === "\\" && i + 1 < line.length) {
+          const n = line[i + 1];
+          const m = { n: "\n", r: "\r", t: "\t", '"': '"', "\\": "\\" }[n];
+          if (m !== undefined) { cur += m; i += 2; continue; }
+        }
+        cur += line[i++];
+      }
+      if (i >= line.length) throw new Error("따옴표가 닫히지 않았다");
+      i++;
+    } else if (line[i] === "'") {
+      i++;
+      while (i < line.length && line[i] !== "'") cur += line[i++];
+      if (i >= line.length) throw new Error("따옴표가 닫히지 않았다");
+      i++;
+    } else {
+      while (i < line.length && !/\s/.test(line[i])) cur += line[i++];
+    }
+    out.push(cur);
+  }
+  return out;
+}
+
+/* ---- 바이트 그리기 ---- */
+function tokHtml(toks) {
+  return toks.map((t) => typeof t === "string" ? esc(t) : `<span class="esc">${esc(t.x)}</span>${t.x === "\\n" ? "<br>" : ""}`).join("");
+}
+function spansHtml(spans) {
+  if (!spans.length) return '<span class="esc">(없음)</span>';
+  return spans.map((s) => `<span class="seg ${s.k}">${tokHtml(s.b)}</span>`).join("");
+}
+/* 인자 배열 → 보낼 RESP 바이트 미리보기 (브리지의 encode 와 같은 규칙) */
+function argSpans(args) {
+  const T = (s) => {
+    const out = [];
+    let run = "";
+    for (const ch of s) {
+      const c = ch.codePointAt(0);
+      if (c < 32 || c === 127) { if (run) { out.push(run); run = ""; } out.push({ x: { 13: "\\r", 10: "\\n", 9: "\\t" }[c] || "\\x" + c.toString(16).padStart(2, "0") }); }
+      else run += ch;
+    }
+    if (run) out.push(run);
+    return out;
+  };
+  const crlf = { k: "crlf", b: [{ x: "\\r" }, { x: "\\n" }] };
+  const out = [{ k: "head", b: ["*" + args.length] }, crlf];
+  for (const a of args) out.push({ k: "head", b: ["$" + enc.encode(a).length] }, crlf, { k: "data", b: T(a) }, crlf);
+  return out;
+}
+function rawPreview(text) {
+  // 브리지의 unescape 와 같은 규칙으로 바이트 수만 센다
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\\" && "rnt\\".includes(text[i + 1])) { n++; i++; continue; }
+    if (text[i] === "\\" && text[i + 1] === "x" && /^[0-9a-f]{2}$/i.test(text.slice(i + 2, i + 4))) { n++; i += 3; continue; }
+    n += enc.encode(text[i]).length;
+  }
+  return n;
+}
+
+/* ---- 응답을 redis-cli 처럼 ---- */
+function replyText(r, indent = "") {
+  switch (r.t) {
+    case "simple": return r.v;
+    case "error": return "(error) " + r.v;
+    case "int": return "(integer) " + r.v;
+    case "null": return "(nil)";
+    case "bulk": return JSON.stringify(r.v);
+    case "array":
+      if (!r.v.length) return "(empty array)";
+      return r.v.map((x, i) => {
+        const p = `${i + 1}) `;
+        const body = replyText(x, indent + " ".repeat(p.length));
+        return (i ? indent : "") + p + body;
+      }).join("\n");
+  }
+  return "?";
+}
+
+/* ---- 로그 ---- */
+function addLog(label, res) {
+  const log = $("#log");
+  if (log.querySelector(".empty")) log.innerHTML = "";
+  const el = document.createElement("div");
+  el.className = "ex";
+  if (res.error) {
+    el.innerHTML = `<div class="top"><b>${esc(label)}</b></div><div class="reply error">${esc(res.error)}</div>`;
+    log.prepend(el);
+    return el;
+  }
+  const replies = (res.replies || []).map((r) => `<div class="reply ${r.t === "error" ? "error" : ""}">${esc(replyText(r))}</div>`).join("");
+  const flags = [];
+  if (res.pending) flags.push(`응답이 아직 덜 왔다: ${res.pending}바이트를 들고 기다리는 중`);
+  if (res.replies && !res.replies.length && !res.closed && !res.pending) flags.push("응답 없음: 서버가 명령이 끝나기를 기다리는 중 (query buffer 에 쌓임)");
+  if (res.closed) flags.push("서버가 연결을 끊었다 (다음 요청에서 새로 연결한다)");
+  if (res.replies && res.replies.length > 1) flags.push(`응답 ${res.replies.length}개: 한 번 보내고 여러 개 받음 (파이프라이닝)`);
+  el.innerHTML = `
+    <div class="top"><b>${esc(label)}</b><span>${res.sent_len}B 보냄 · ${res.recv_len}B 받음 · ${res.ms}ms</span></div>
+    <div class="dir"><span class="arrow">→</span><div class="bytes">${spansHtml(res.sent)}</div></div>
+    <div class="dir"><span class="arrow">←</span><div class="bytes">${spansHtml(res.recv)}</div></div>
+    ${replies}
+    ${flags.map((f) => `<div class="flag">${esc(f)}</div>`).join("")}
+    <div class="changes"></div>`;
+  log.prepend(el);
+  return el;
+}
+
+async function sendNow(args) {
+  if (!args.length) return;
+  const res = await api("/api/send", { args });
+  markChange(addLog(args.join(" "), res));
+  await refresh();
+}
+/* 보내기는 한 번에 하나씩: 앞 요청의 새로고침이 끝나야 다음 요청을 보낸다(변화 표시가 섞이지 않게) */
+let chain = Promise.resolve();
+function queue(fn) { chain = chain.then(fn).catch((e) => addLog("오류", { error: String(e) })); return chain; }
+const sendArgs = (args) => queue(() => sendNow(args));
+async function sendLine(line) {
+  let args;
+  try { args = splitArgs(line); } catch (e) { addLog(line, { error: e.message }); return; }
+  if (!args.length) return;
+  cmdHistory.push(line); hpos = cmdHistory.length;
+  await sendNow(args);
+}
+
+/* ---- 상태 ---- */
+function keysOf(st) {
+  // main 의 모든 엔트리 + expires 에서 만료 시각을 붙인다. 위치: ht[t][버킷]
+  const when = new Map();
+  st.expires.tables.forEach((t) => t.buckets.forEach((b) => b.forEach(([k, w]) => when.set(k, w))));
+  const rows = [];
+  st.main.tables.forEach((t, ti) => t.buckets.forEach((b, bi) => b.forEach(([k, v], ci) => rows.push({ k, v, when: when.get(k), loc: `ht[${ti}][${bi}]${b.length > 1 ? " #" + (ci + 1) : ""}` }))));
+  return rows;
+}
+
+function changesText(prev, now, before, after) {
+  const add = [], del = [], mod = [];
+  for (const [k, v] of now) if (!prev.has(k)) add.push(k); else if (prev.get(k) !== v) mod.push(k);
+  for (const k of prev.keys()) if (!now.has(k)) del.push(k);
+  const parts = [];
+  const list = (a) => a.slice(0, 5).map(esc).join(", ") + (a.length > 5 ? ` 외 ${a.length - 5}개` : "");
+  if (add.length) parts.push(`<b>+${add.length}</b> ${list(add)}`);
+  if (mod.length) parts.push(`<b>~${mod.length}</b> ${list(mod)}`);
+  if (del.length) parts.push(`<b>−${del.length}</b> ${list(del)}`);
+  if (before && after) {
+    const a = before.main, b = after.main;
+    if (a.rehashidx !== b.rehashidx) parts.push(`main rehashidx <b>${a.rehashidx} → ${b.rehashidx}</b>`);
+    if (a.tables[0].size !== b.tables[0].size || a.tables[1].size !== b.tables[1].size)
+      parts.push(`main 버킷 <b>${a.tables[0].size}/${a.tables[1].size} → ${b.tables[0].size}/${b.tables[1].size}</b> (ht[0]/ht[1])`);
+  }
+  return parts.length ? "변화: " + parts.join(" · ") : "변화 없음";
+}
+
+async function refresh() {
+  const my = ++seq;
+  let st;
+  try { st = await api("/api/state?max=" + $("#maxb").value); }
+  catch (e) { st = { ok: false, error: "브리지(inspector/server.py)에 연결할 수 없다" }; }
+  if (my <= applied) return;
+  applied = my;
+  const conn = $("#conn");
+  if (!st.ok) {
+    conn.className = "pill down"; conn.textContent = (st.redis || "") + " 연결 안 됨";
+    $("#banner").className = "banner on";
+    $("#banner").textContent = "mini-redis 에 연결할 수 없다: " + st.error + " — 먼저 make run 으로 서버를 켜고, 진짜 Redis 가 아니라 mini-redis 인지 확인한다 (DEBUG HT 는 mini-redis 에만 있다).";
+    return;
+  }
+  $("#banner").className = "banner";
+  conn.className = "pill ok"; conn.textContent = st.redis + " 연결됨";
+  clockSkew = st.main.now_ms - Date.now();
+  const rows = keysOf(st);
+  const now = new Map(rows.map((r) => [r.k, r.v]));
+  if (pendingChange && my > pendingChange.after) {
+    const p = pendingChange;
+    p.el.querySelector(".changes").innerHTML = changesText(p.keys, now, p.st, st);
+    pendingChange = null;
+  }
+  flashKeys = new Set();
+  if (state) for (const [k, v] of now) if (prevKeys.get(k) !== v) flashKeys.add(k);
+  prevKeys = now;
+  state = st;
+  $("#activeRehash").checked = !!st.main.active_rehash;
+  render();
+}
+
+function render() {
+  const st = state;
+  if (!st) return;
+  const m = st.main, x = st.expires;
+  const keyN = m.tables[0].used + m.tables[1].used;
+  const expN = x.tables[0].used + x.tables[1].used;
+  const size = m.tables[0].size + m.tables[1].size;
+  const pct = m.maxmemory ? Math.min(100, (m.used_memory / m.maxmemory) * 100) : 0;
+  $("#stats").innerHTML = [
+    ["키", keyN, `TTL 있는 키 ${expN}`],
+    ["메모리 (직접 셈)", fmtBytes(m.used_memory), m.maxmemory ? `상한 ${fmtBytes(m.maxmemory)}<div class="bar"><i style="width:${pct}%"></i></div>` : "상한 없음"],
+    ["부하율 main", (m.tables[0].used / m.tables[0].size).toFixed(2), "ht[0] 키 수 / 버킷 수. 1 이 되면 다음 키에서 2배로"],
+    ["rehash", m.rehashidx < 0 ? "아님" : "idx " + m.rehashidx, m.rehashidx < 0 ? `버킷 ${size}개` : `ht[0] ${m.tables[0].size} → ht[1] ${m.tables[1].size}`],
+    ["내보낸 키", m.evicted, "maxmemory 넘을 때 (allkeys-random)"],
+  ].map(([k, v, s]) => `<div class="stat"><div class="k">${k}</div><div class="v">${esc(v)}</div><div class="s">${s}</div></div>`).join("");
+  $("#nowLabel").textContent = "서버 시각 " + new Date(m.now_ms).toLocaleTimeString();
+
+  const rows = keysOf(st).sort((a, b) => a.k.localeCompare(b.k));
+  const truncated = m.tables.some((t) => t.buckets.length < t.size);
+  $("#keys").innerHTML = rows.length ? rows.map((r) => `
+    <tr class="${flashKeys.has(r.k) ? "flash" : ""}">
+      <td>${esc(r.k)}</td><td>${esc(r.v)}</td>
+      <td class="ttl" data-when="${r.when ?? ""}"></td>
+      <td class="loc">${r.loc}</td></tr>`).join("") + (truncated ? `<tr><td colspan="4" class="loc">버킷 일부만 받아서 나머지 키는 빠져 있다 (위 '버킷 N개까지'를 늘린다)</td></tr>` : "")
+    : `<tr><td colspan="4" class="loc">비어 있다</td></tr>`;
+  tickTtl();
+
+  const d = st[htView];
+  const re = d.rehashidx;
+  $("#htNote").innerHTML = re < 0
+    ? "rehash 중이 아니다. ht[1] 은 비어 있고 모든 키는 ht[0] 에 있다."
+    : `rehash 중: ${re === 0 ? "막 시작해서 아직 옮긴 버킷이 없다." : `ht[0] 의 버킷 ${re === 1 ? "0" : "0 ~ " + (re - 1)} 은 이미 ht[1] 로 옮겼다(회색).`} <b>${re}번</b>이 다음 차례. 새 키는 항상 ht[1] 에 들어간다. 모든 키는 둘 중 정확히 한 곳에만 있다.`;
+  $("#ht").innerHTML = d.tables.map((t, ti) => {
+    const lf = t.size ? (t.used / t.size).toFixed(2) : "-";
+    const rowsHtml = t.buckets.map((b, bi) => {
+      const cls = ti === 0 && re >= 0 ? (bi < re ? "moved" : bi === re ? "next" : "") : "";
+      const nodes = b.map(([k, v]) => `<span class="node ${htView === "expires" ? "exp" : ""} ${flashKeys.has(k) ? "flash" : ""}" title="${esc(k)} = ${esc(htView === "expires" ? new Date(v).toLocaleTimeString() : v)}">${esc(k)}</span>`).join("");
+      return `<div class="bk ${cls}"><div class="i">${bi}</div><div class="chain">${nodes}</div></div>`;
+    }).join("");
+    const more = t.buckets.length < t.size ? `<div class="bk"><div class="i">…</div><div class="chain loc">나머지 ${t.size - t.buckets.length}개 버킷 생략</div></div>` : "";
+    return `<div class="ht ${t.size ? "" : "off"}"><h3>ht[${ti}] <small>버킷 ${t.size} · 키 ${t.used} · 부하율 ${lf}</small></h3>
+      <div class="buckets">${t.size ? rowsHtml + more : '<div class="empty">비어 있음 (rehash 할 때만 쓴다)</div>'}</div></div>`;
+  }).join("");
+}
+
+function tickTtl() {
+  const now = Date.now() + clockSkew;
+  document.querySelectorAll("td.ttl").forEach((td) => {
+    const w = td.dataset.when;
+    if (!w) { td.textContent = "-"; td.className = "ttl"; return; }
+    const left = Number(w) - now;
+    td.className = "ttl" + (left < 0 ? " dead" : "");
+    td.textContent = left < 0 ? `만료됨 ${(-left / 1000).toFixed(1)}s 전 (아직 안 지움)` : (left / 1000).toFixed(1) + "s";
+  });
+}
+function fmtBytes(n) { return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB"; }
+
+/* ---- 이벤트 ---- */
+const cmdHistory = [];
+let hpos = 0;
+$("#tabs").addEventListener("click", (e) => {
+  const t = e.target.dataset.tab;
+  if (!t) return;
+  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+  document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("on", p.id === "pane-" + t));
+});
+$("#htTabs").addEventListener("click", (e) => {
+  const t = e.target.dataset.ht;
+  if (!t) return;
+  htView = t;
+  document.querySelectorAll("#htTabs button").forEach((b) => b.classList.toggle("on", b.dataset.ht === t));
+  render();
+});
+$("#consoleForm").addEventListener("submit", (e) => { e.preventDefault(); const v = $("#cmd").value; $("#cmd").value = ""; updateCmdPreview(); queue(() => sendLine(v)); });
+$("#cmd").addEventListener("keydown", (e) => {
+  if (e.key === "ArrowUp" && hpos > 0) { $("#cmd").value = cmdHistory[--hpos]; e.preventDefault(); updateCmdPreview(); }
+  if (e.key === "ArrowDown") { hpos = Math.min(cmdHistory.length, hpos + 1); $("#cmd").value = cmdHistory[hpos] || ""; e.preventDefault(); updateCmdPreview(); }
+});
+function updateCmdPreview() {
+  const v = $("#cmd").value;
+  let html = '<span class="esc">명령을 입력하면 보낼 바이트가 여기 보인다</span>';
+  if (v.trim()) {
+    try { const a = splitArgs(v); html = `인자 ${a.length}개 → <span class="bytes">${spansHtml(argSpans(a))}</span>`; }
+    catch (e) { html = esc(e.message); }
+  }
+  $("#cmdPreview").innerHTML = html;
+}
+$("#cmd").addEventListener("input", updateCmdPreview);
+document.addEventListener("click", (e) => {
+  const c = e.target.closest("[data-cmd]");
+  if (c) queue(() => sendLine(c.dataset.cmd));
+  const r = e.target.closest("[data-raw]");
+  if (r) { $("#raw").value = r.dataset.raw; updateRawPreview(); }
+  const s = e.target.closest("[data-step]");
+  if (s) sendArgs(["DEBUG", "REHASHSTEP", "main", s.dataset.step]);
+});
+
+function formArgs(kind) {
+  const k = $("#fKey").value;
+  if (kind !== "SET") return [kind, k];
+  const a = ["SET", k, $("#fVal").value];
+  const ex = document.querySelector("input[name=fExp]:checked").value;
+  const cond = document.querySelector("input[name=fCond]:checked").value;
+  if (ex) a.push(ex, $("#fAmt").value);
+  if (cond) a.push(cond);
+  return a;
+}
+function updateFormPreview() {
+  const a = formArgs("SET");
+  $("#formPreview").innerHTML = `<b>${esc(a.map((x) => /\s|^$/.test(x) ? JSON.stringify(x) : x).join(" "))}</b><br><span class="bytes">${spansHtml(argSpans(a))}</span>`;
+}
+document.querySelector("#pane-form").addEventListener("input", updateFormPreview);
+$("#fSet").onclick = () => sendArgs(formArgs("SET"));
+$("#fGet").onclick = () => sendArgs(formArgs("GET"));
+$("#fTtl").onclick = () => sendArgs(formArgs("PTTL"));
+$("#fDel").onclick = () => sendArgs(formArgs("DEL"));
+$("#fPersist").onclick = () => sendArgs(formArgs("PERSIST"));
+
+function updateRawPreview() { $("#rawPreview").textContent = `${rawPreview($("#raw").value)}바이트를 보낸다`; }
+$("#raw").addEventListener("input", updateRawPreview);
+$("#rawSend").onclick = () => queue(async () => {
+  const text = $("#raw").value;
+  const res = await api("/api/raw", { text });
+  markChange(addLog("원본 " + (text.length > 40 ? text.slice(0, 40) + "…" : text), res));
+  await refresh();
+});
+$("#reconnect").onclick = () => queue(async () => { await api("/api/reconnect", {}); addLog("연결 새로 열기", { sent: [], recv: [], sent_len: 0, recv_len: 0, ms: 0, replies: [] }); });
+
+$("#activeRehash").onchange = (e) => sendArgs(["DEBUG", "ACTIVEREHASH", e.target.checked ? "on" : "off"]);
+$("#maxb").onchange = refresh;
+$("#clearLog").onclick = () => { $("#log").innerHTML = '<div class="empty">비웠다.</div>'; };
+
+$("#labRehash").onclick = () => queue(async () => {
+  await sendNow(["DEBUG", "ACTIVEREHASH", "off"]);
+  await sendNow(["FLUSHALL"]);
+  for (let i = 1; i <= 5; i++) await sendNow(["SET", "k" + i, "v" + i]);
+  htView = "main";
+  document.querySelectorAll("#htTabs button").forEach((b) => b.classList.toggle("on", b.dataset.ht === "main"));
+  render();
+});
+$("#fill").onclick = () => queue(async () => {
+  const body = { n: Number($("#fillN").value), prefix: $("#fillPrefix").value, ttl_ms: Number($("#fillTtl").value) };
+  const r = await api("/api/fill", body);
+  const el = addLog(`SET ${body.prefix}0 … ${body.prefix}${body.n - 1} (파이프라이닝, 별도 연결)`, r.error ? r : {
+    sent: [], recv: [], sent_len: "-", recv_len: "-", ms: r.ms,
+    replies: [{ t: r.errors.length ? "error" : "simple", v: `${r.ok}/${r.n}개 OK${r.errors.length ? " · 오류 예: " + r.errors[0] : ""}` }],
+  });
+  markChange(el);
+  await refresh();
+});
+
+updateCmdPreview(); updateFormPreview(); updateRawPreview();
+refresh();
+setInterval(() => { if ($("#auto").checked) refresh(); }, 1000);
+setInterval(tickTtl, 100);
+</script>
+</body>
+</html>

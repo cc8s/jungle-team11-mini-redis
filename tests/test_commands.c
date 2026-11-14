@@ -267,6 +267,102 @@ static void test_binary_roundtrip(void)
     CHECK(OUT.len == 11 && memcmp(OUT.data, "$5\r\na\0b\r\n\r\n", 11) == 0);
 }
 
+/* 문자열 인자 명령을 실행만 한다 (응답은 OUT 에 남는다) */
+#define EXEC(...) run("", __VA_ARGS__)
+
+static int out_is(const buf *want)
+{
+    int ok = OUT.len == want->len && memcmp(OUT.data, want->data, OUT.len) == 0;
+    if (!ok)
+        fprintf(stderr, "  want: %.*s\n  got:  %.*s\n", (int)want->len, want->data, (int)OUT.len, OUT.data);
+    return ok;
+}
+
+/* TC-CMD-015 EP: DEBUG HT 응답 모양 — 키 1개, 버킷 4개, ht[1] 비어 있음. maxbuckets 로 앞부분만 */
+static void test_debug_ht_shape(void)
+{
+    reset(0, DB_NOEVICTION);
+    CHECK(run("+OK\r\n", 3, "SET", "a", "1"));
+    size_t slot = dict_default_hash("a", 1) & 3;
+    for (int maxb = 4; maxb >= 2; maxb -= 2) {
+        buf w;
+        buf_init(&w);
+        buf_appendf(&w, "*14\r\n$6\r\nnow_ms\r\n:1000000\r\n$11\r\nused_memory\r\n:%zu\r\n", db_entry_cost(1, 1));
+        buf_appendf(&w, "$9\r\nmaxmemory\r\n:0\r\n$7\r\nevicted\r\n:0\r\n$13\r\nactive_rehash\r\n:1\r\n");
+        buf_appendf(&w, "$9\r\nrehashidx\r\n:-1\r\n$6\r\ntables\r\n*2\r\n*3\r\n:4\r\n:1\r\n*%d\r\n", maxb);
+        for (size_t i = 0; i < (size_t)maxb; i++)
+            buf_appendf(&w, i == slot ? "*1\r\n*2\r\n$1\r\na\r\n$1\r\n1\r\n" : "*0\r\n");
+        buf_appendf(&w, "*3\r\n:0\r\n:0\r\n*0\r\n");
+        if (maxb == 4)
+            EXEC(3, "DEBUG", "HT", "main");
+        else
+            EXEC(4, "debug", "ht", "main", "2");
+        CHECK(out_is(&w));
+        buf_free(&w);
+    }
+    /* expires 는 값 대신 만료 시각(정수) */
+    CHECK(run(":1\r\n", 3, "PEXPIRE", "a", "500"));
+    EXEC(3, "DEBUG", "HT", "expires");
+    CHECK(strstr(OUT.data, "*2\r\n$1\r\na\r\n:1000500\r\n") != NULL);
+}
+
+/* TC-CMD-016 ST: DEBUG HT 는 읽기 전용 — rehash 를 진행시키지 않고 만료된 키도 지우지 않는다.
+ * REHASHSTEP 은 진행시키고, ACTIVEREHASH 는 플래그만 바꾼다 */
+static void test_debug_readonly_and_step(void)
+{
+    reset(0, DB_NOEVICTION);
+    const char *k[] = {"k1", "k2", "k3", "k4", "k5"};
+    for (int i = 0; i < 5; i++)
+        run("+OK\r\n", 3, "SET", k[i], "v");
+    CHECK(dict_is_rehashing(D->main)); /* 5번째 키에서 4 → 8 rehash 시작 */
+    long idx = D->main->rehashidx;
+    for (int i = 0; i < 3; i++)
+        EXEC(3, "DEBUG", "HT", "main");
+    CHECK(D->main->rehashidx == idx);
+
+    EXEC(4, "DEBUG", "REHASHSTEP", "main", "1"); /* 한 칸: 그 버킷에 키가 몰려 있었으면 바로 끝날 수도 있다 */
+    char want[32];
+    snprintf(want, sizeof want, ":%ld\r\n", D->main->rehashidx);
+    CHECK(D->main->rehashidx != idx && strcmp(OUT.data, want) == 0);
+    CHECK(run(":-1\r\n", 4, "DEBUG", "REHASHSTEP", "main", "100"));
+    CHECK(D->main->ht[0].size == 8 && D->main->ht[1].size == 0);
+    CHECK(run(":-1\r\n", 4, "DEBUG", "REHASHSTEP", "expires", "1")); /* rehash 중이 아니면 그대로 */
+
+    run("+OK\r\n", 5, "SET", "x", "1", "PX", "10");
+    fake_now += 100;
+    size_t before = dict_len(D->main);
+    EXEC(3, "DEBUG", "HT", "main");
+    EXEC(3, "DEBUG", "HT", "expires");
+    CHECK(dict_len(D->main) == before && dict_len(D->expires) == 1);
+
+    CHECK(run("+OK\r\n", 3, "DEBUG", "ACTIVEREHASH", "off"));
+    CHECK(D->active_rehash == 0);
+    EXEC(3, "DEBUG", "HT", "main");
+    CHECK(strstr(OUT.data, "$13\r\nactive_rehash\r\n:0\r\n") != NULL);
+    CHECK(run("+OK\r\n", 3, "DEBUG", "ACTIVEREHASH", "ON"));
+    CHECK(D->active_rehash == 1);
+    CHECK(last_write == 0);
+}
+
+/* TC-CMD-017 BVA/EG: DEBUG 인자 오류 */
+static void test_debug_errors(void)
+{
+    reset(0, DB_NOEVICTION);
+    CHECK(run("-ERR wrong number of arguments for 'debug' command\r\n", 2, "DEBUG", "HT"));
+    CHECK(run("-ERR DEBUG HT target must be 'main' or 'expires'\r\n", 3, "DEBUG", "HT", "foo"));
+    CHECK(run("-ERR maxbuckets must be between 1 and 65536\r\n", 4, "DEBUG", "HT", "main", "0"));
+    CHECK(run("-ERR maxbuckets must be between 1 and 65536\r\n", 4, "DEBUG", "HT", "main", "65537"));
+    CHECK(run("-ERR maxbuckets must be between 1 and 65536\r\n", 4, "DEBUG", "HT", "main", "x"));
+    EXEC(4, "DEBUG", "HT", "main", "65536");
+    CHECK(OUT.data[0] == '*');
+    CHECK(run("-ERR steps must be between 1 and 1000000\r\n", 4, "DEBUG", "REHASHSTEP", "main", "0"));
+    CHECK(run("-ERR steps must be between 1 and 1000000\r\n", 4, "DEBUG", "REHASHSTEP", "main", "1000001"));
+    CHECK(run("-ERR DEBUG REHASHSTEP target must be 'main' or 'expires'\r\n", 4, "DEBUG", "REHASHSTEP", "x", "1"));
+    CHECK(run("-ERR unknown DEBUG subcommand. Try HT, REHASHSTEP, ACTIVEREHASH\r\n", 3, "DEBUG", "ACTIVEREHASH", "maybe"));
+    CHECK(run("-ERR unknown DEBUG subcommand. Try HT, REHASHSTEP, ACTIVEREHASH\r\n", 3, "DEBUG", "NOPE", "x"));
+    CHECK(run("-ERR unknown DEBUG subcommand. Try HT, REHASHSTEP, ACTIVEREHASH\r\n", 5, "DEBUG", "HT", "main", "1", "2"));
+}
+
 int main(void)
 {
     buf_init(&OUT);
@@ -284,6 +380,9 @@ int main(void)
     RUN(test_handshake);
     RUN(test_maxmemory);
     RUN(test_binary_roundtrip);
+    RUN(test_debug_ht_shape);
+    RUN(test_debug_readonly_and_step);
+    RUN(test_debug_errors);
     db_free(D);
     buf_free(&OUT);
     TEST_DONE();

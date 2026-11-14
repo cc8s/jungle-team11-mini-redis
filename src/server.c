@@ -88,11 +88,15 @@ static int client_flush(client *c)
     return 0;
 }
 
-/* 입력 버퍼에서 완성된 명령을 모두 실행한다 */
-static void client_process(client *c, db *d)
+/* 입력 버퍼에서 완성된 명령을 모두 실행한다. 출력 버퍼가 상한을 넘으면 연결을 닫고 -1 */
+static int client_process(client *c, db *d)
 {
     size_t off = 0;
     while (!c->closing && off < c->in.len) {
+        if (c->out.len > (size_t)SERVER_MAX_OUTBUF) {
+            client_close(c); /* 읽어 가지 않는 손님: 끝없이 커지는 걸 막는다 */
+            return -1;
+        }
         resp_cmd cmd;
         size_t used;
         const char *err;
@@ -109,28 +113,35 @@ static void client_process(client *c, db *d)
         off += used;
     }
     buf_consume(&c->in, off);
+    if (c->out.len > (size_t)SERVER_MAX_OUTBUF) {
+        client_close(c);
+        return -1;
+    }
+    return 0;
 }
 
+/* 공정성: 이벤트 한 번에 SERVER_READ_CHUNK 만 한 번 읽고 다음 손님으로 넘어간다.
+ * 남은 데이터는 level-triggered epoll 이 다음 바퀴에 다시 알려 준다.
+ * (EAGAIN 까지 계속 읽으면, 읽는 속도보다 빨리 보내는 손님에게서 루프가 못 빠져나와 다른 손님이 굶는다) */
 static void client_readable(client *c, db *d)
 {
-    char tmp[16 * 1024];
-    for (;;) {
-        ssize_t n = read(c->fd, tmp, sizeof tmp);
-        if (n > 0) {
-            if (buf_append(&c->in, tmp, (size_t)n) != 0 || c->in.len > (size_t)SERVER_MAX_QUERYBUF) {
-                client_close(c);
-                return;
-            }
-            continue;
-        }
-        if (n < 0 && errno == EINTR)
-            continue;
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
-            break;
-        client_close(c); /* 0 = 상대가 닫음, 그 외 오류 */
+    char tmp[SERVER_READ_CHUNK];
+    ssize_t n;
+    do {
+        n = read(c->fd, tmp, sizeof tmp);
+    } while (n < 0 && errno == EINTR);
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        return;
+    if (n <= 0) { /* 0 = 상대가 닫음, 그 외 오류 */
+        client_close(c);
         return;
     }
-    client_process(c, d);
+    if (buf_append(&c->in, tmp, (size_t)n) != 0 || c->in.len > (size_t)SERVER_MAX_QUERYBUF) {
+        client_close(c);
+        return;
+    }
+    if (client_process(c, d) != 0)
+        return;
     client_flush(c);
 }
 

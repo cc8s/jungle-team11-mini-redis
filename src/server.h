@@ -5,9 +5,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "server_config.h"
+
 enum {
-    SERVER_DEFAULT_PORT = 6379,
-    SERVER_MAX_CLIENTS = 10000,
     SERVER_LISTEN_BACKLOG = 511,
     SERVER_CRON_INTERVAL_MS = 100,
     SERVER_CRON_TASK_BUDGET_MS = 1,
@@ -20,19 +20,7 @@ enum server_result {
     SERVER_SYSTEM_ERROR, /* 소켓 · 이벤트 루프 호출 실패. errno 를 본다 */
 };
 
-/* 서버 설정. 13단계에서 환경변수로 채운다. */
-struct server_config {
-    const char *bind_address; /* IPv4 주소 문자열 */
-    int port;                 /* 0 이면 OS 가 빈 포트를 고른다 (테스트용) */
-    size_t max_clients;
-    int64_t idle_timeout_ms; /* 0 이면 유휴 연결을 닫지 않는다 */
-    bool is_flush_enabled;
-};
-
 struct server;
-
-/* 기본값: 127.0.0.1:6379, 최대 연결 SERVER_MAX_CLIENTS, 유휴 타임아웃 없음, FLUSHALL 비활성. */
-void server_config_init_default(struct server_config *cfg);
 
 /* 소켓을 열고 이벤트 루프와 db 를 만든다. 실패하면 NULL, server_destroy() 로 해제한다. */
 struct server *server_create(const struct server_config *cfg);

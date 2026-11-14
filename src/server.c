@@ -23,7 +23,6 @@
 #include "expire.h"
 #include "mem.h"
 
-static const char DEFAULT_BIND_ADDRESS[] = "127.0.0.1";
 static const char MAX_CLIENTS_MESSAGE[] = "-ERR max number of clients reached\r\n";
 
 /* 불변식: conns 목록의 연결은 모두 이벤트 루프에 등록돼 있고 conn_count 와 개수가 같다 */
@@ -51,17 +50,6 @@ static void handle_cron(struct event_loop *loop, void *ctx);
 static void close_idle_clients(struct server *server, int64_t now_ms);
 static void fix_mmap_threshold(void);
 
-void server_config_init_default(struct server_config *cfg)
-{
-    *cfg = (struct server_config){
-        .bind_address = DEFAULT_BIND_ADDRESS,
-        .port = SERVER_DEFAULT_PORT,
-        .max_clients = SERVER_MAX_CLIENTS,
-        .idle_timeout_ms = 0,
-        .is_flush_enabled = false,
-    };
-}
-
 /* 끊긴 소켓에 쓰면 SIGPIPE 로 프로세스가 죽으므로 무시하고 send 의 EPIPE 로 처리한다 */
 struct server *server_create(const struct server_config *cfg)
 {
@@ -74,6 +62,9 @@ struct server *server_create(const struct server_config *cfg)
     fix_mmap_threshold();
     server->loop = event_loop_create();
     server->db = db_create();
+    if (server->db != NULL) {
+        db_set_max_bytes(server->db, cfg->max_memory_bytes);
+    }
     server->listen_fd = open_listen_socket(cfg);
     if (server->loop == NULL || server->db == NULL || server->listen_fd < 0) {
         goto fail;

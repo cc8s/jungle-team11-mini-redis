@@ -67,6 +67,11 @@ void hash_table_rehash_step(struct hash_table *ht, size_t bucket_count);
 /* budget_ms 동안 rehash 를 진행한다. 예산이 0 이어도 버킷 100개 한 묶음은 옮긴다. */
 void hash_table_rehash_for_ms(struct hash_table *ht, int64_t budget_ms);
 
+/* 비지 않은 버킷을 최대 bucket_count 개 해제한다. 빈 버킷은 그 10배까지만 지나친다.
+ * 모두 비워 테이블까지 해제했으면 true 를 반환하고, 그 뒤로 ht 를 쓰면 안 된다.
+ * 한 번이라도 부른 테이블에는 이 함수와 hash_table_destroy() 만 부를 수 있다. */
+bool hash_table_destroy_step(struct hash_table *ht, size_t bucket_count);
+
 /* 키의 모든 바이트로 seed 를 넣은 SipHash-2-4 를 계산한다. 같은 seed 면 같은 값이다. */
 uint64_t hash_table_hash(const struct str *key);
 

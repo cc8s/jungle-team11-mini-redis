@@ -1,0 +1,53 @@
+#ifndef MINI_REDIS_SERVER_H
+#define MINI_REDIS_SERVER_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+enum {
+    SERVER_DEFAULT_PORT = 6379,
+    SERVER_MAX_CLIENTS = 10000,
+    SERVER_LISTEN_BACKLOG = 511,
+    SERVER_CRON_INTERVAL_MS = 100,
+};
+
+enum server_result {
+    SERVER_OK = 0,
+    SERVER_OUT_OF_MEMORY,
+    SERVER_SYSTEM_ERROR, /* 소켓 · 이벤트 루프 호출 실패. errno 를 본다 */
+};
+
+/* 서버 설정. 13단계에서 환경변수로 채운다. */
+struct server_config {
+    const char *bind_address; /* IPv4 주소 문자열 */
+    int port;                 /* 0 이면 OS 가 빈 포트를 고른다 (테스트용) */
+    size_t max_clients;
+    int64_t idle_timeout_ms; /* 0 이면 유휴 연결을 닫지 않는다 */
+    bool is_flush_enabled;
+};
+
+struct server;
+
+/* 기본값: 127.0.0.1:6379, 최대 연결 SERVER_MAX_CLIENTS, 유휴 타임아웃 없음, FLUSHALL 비활성. */
+void server_config_init_default(struct server_config *cfg);
+
+/* 소켓을 열고 이벤트 루프와 db 를 만든다. 실패하면 NULL, server_destroy() 로 해제한다. */
+struct server *server_create(const struct server_config *cfg);
+
+/* 열린 연결을 모두 닫고 서버를 해제한다. NULL 이면 아무것도 하지 않는다. */
+void server_destroy(struct server *server);
+
+/* SIGINT · SIGTERM 이나 이벤트 루프 오류가 날 때까지 요청을 처리한다. */
+enum server_result server_run(struct server *server);
+
+/* 한 바퀴만 처리한다. 테스트에서 서버와 클라이언트를 한 스레드로 번갈아 돌릴 때 쓴다. */
+enum server_result server_run_once(struct server *server, int max_wait_ms);
+
+/* 실제로 열린 포트를 반환한다 (설정 포트가 0 이었을 때 확인용). */
+int server_port(const struct server *server);
+
+/* 지금 열린 클라이언트 연결 수를 반환한다. */
+size_t server_client_count(const struct server *server);
+
+#endif

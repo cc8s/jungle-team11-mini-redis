@@ -85,6 +85,29 @@ static void test_clear_keeps_capacity(void)
     buffer_deinit(&buf);
 }
 
+static void test_consume_moves_rest_to_front(void)
+{
+    struct buffer buf;
+    buffer_init(&buf);
+    CHECK(buffer_append_text(&buf, "GET a\r\nGET b\r\n") == BUFFER_OK);
+    buffer_consume(&buf, strlen("GET a\r\n"));
+    CHECK(buf.len == strlen("GET b\r\n"));
+    CHECK(memcmp(buf.data, "GET b\r\n", buf.len) == 0);
+    buffer_deinit(&buf);
+}
+
+static void test_consume_more_than_len_empties(void)
+{
+    struct buffer buf;
+    buffer_init(&buf);
+    CHECK(buffer_append_text(&buf, "abc") == BUFFER_OK);
+    buffer_consume(&buf, 10);
+    CHECK(buf.len == 0);
+    buffer_consume(&buf, 1);
+    CHECK(buf.len == 0);
+    buffer_deinit(&buf);
+}
+
 static void test_deinit_returns_used_bytes_to_baseline(void)
 {
     size_t baseline_bytes = mem_used_bytes();
@@ -106,6 +129,8 @@ int main(void)
     RUN(test_many_appends_grow_and_keep_content);
     RUN(test_append_overflowing_length_returns_out_of_memory);
     RUN(test_clear_keeps_capacity);
+    RUN(test_consume_moves_rest_to_front);
+    RUN(test_consume_more_than_len_empties);
     RUN(test_deinit_returns_used_bytes_to_baseline);
     TEST_DONE();
     return 0;

@@ -35,4 +35,7 @@ enum buffer_result buffer_append_text(struct buffer *buf, const char *text);
 /* 내용만 비운다. 할당한 공간은 다시 쓰려고 남겨 둔다. */
 void buffer_clear(struct buffer *buf);
 
+/* 앞에서 len 바이트를 버리고 나머지를 앞으로 당긴다. len 이 내용보다 크면 모두 버린다. */
+void buffer_consume(struct buffer *buf, size_t len);
+
 #endif

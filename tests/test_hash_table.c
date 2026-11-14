@@ -792,6 +792,8 @@ enum {
     PARTIAL_STEP_COUNT = 4,
     MORE_KEY_COUNT = 40,
     FIND_REPEAT_COUNT = 100,
+    LARGE_TABLE_SIZE = 1024,
+    LARGE_BUDGET_MS = 1000,
 };
 
 /* rehash 가 끝날 때까지 rehash_step(ht, 1) 을 부르고 부른 횟수를 돌려준다 */
@@ -1097,6 +1099,55 @@ static void test_random_entry_during_rehash_reaches_both_tables(void)
     hash_table_destroy(ht);
 }
 
+/* key:0 ~ key:1024 를 넣어 1024칸 → 2048칸 늘리기 rehash 가 막 시작된 테이블 */
+static struct hash_table *create_table_growing_from_large_size(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    set_numbered_keys(ht, LARGE_TABLE_SIZE + 1, &value);
+    CHECK(hash_table_is_rehashing(ht));
+    CHECK(hash_table_bucket_count(ht) == (size_t)LARGE_TABLE_SIZE * 2);
+    return ht;
+}
+
+/* 같은 키로 만든 두 테이블 중 하나만 예산 0 으로 진행하면, 남은 step 수가 한 묶음(100)만큼만
+ * 줄어든다 */
+static void test_rehash_for_ms_zero_budget_moves_one_chunk(void)
+{
+    struct hash_table *untouched = create_table_growing_from_large_size();
+    struct hash_table *budgeted = create_table_growing_from_large_size();
+    hash_table_rehash_for_ms(budgeted, 0);
+    CHECK(hash_table_is_rehashing(budgeted));
+    size_t full_steps = run_rehash_to_end(untouched);
+    size_t remaining_steps = run_rehash_to_end(budgeted);
+    CHECK(full_steps - remaining_steps >= HT_REHASH_CHUNK_BUCKETS);
+    CHECK(full_steps - remaining_steps < (size_t)HT_REHASH_CHUNK_BUCKETS * 2);
+    hash_table_destroy(untouched);
+    hash_table_destroy(budgeted);
+}
+
+/* 조회만 오면 rehash 가 진행되지 않지만, 시간 예산 rehash 가 끝까지 옮긴다 */
+static void test_rehash_for_ms_finishes_read_only_table(void)
+{
+    struct hash_table *ht = create_table_growing_from_large_size();
+    CHECK(is_all_numbered_found(ht, 0, LARGE_TABLE_SIZE + 1));
+    CHECK(hash_table_is_rehashing(ht));
+    hash_table_rehash_for_ms(ht, LARGE_BUDGET_MS);
+    CHECK(!hash_table_is_rehashing(ht));
+    CHECK(hash_table_bucket_count(ht) == (size_t)LARGE_TABLE_SIZE * 2);
+    CHECK(is_all_numbered_found(ht, 0, LARGE_TABLE_SIZE + 1));
+    hash_table_destroy(ht);
+}
+
+static void test_rehash_for_ms_when_not_rehashing_does_nothing(void)
+{
+    struct hash_table *ht = hash_table_create(ignore_value);
+    hash_table_rehash_for_ms(ht, LARGE_BUDGET_MS);
+    CHECK(!hash_table_is_rehashing(ht));
+    CHECK(hash_table_bucket_count(ht) == HT_INITIAL_SIZE);
+    hash_table_destroy(ht);
+}
+
 static void run_create_tests(void)
 {
     RUN(test_create_returns_zero_count);
@@ -1201,6 +1252,13 @@ static void run_rehash_operation_tests(void)
     RUN(test_random_entry_during_rehash_reaches_both_tables);
 }
 
+static void run_rehash_budget_tests(void)
+{
+    RUN(test_rehash_for_ms_zero_budget_moves_one_chunk);
+    RUN(test_rehash_for_ms_finishes_read_only_table);
+    RUN(test_rehash_for_ms_when_not_rehashing_does_nothing);
+}
+
 int main(void)
 {
     run_create_tests();
@@ -1212,6 +1270,7 @@ int main(void)
     run_two_table_tests();
     run_rehash_step_tests();
     run_rehash_operation_tests();
+    run_rehash_budget_tests();
     TEST_DONE();
     return 0;
 }

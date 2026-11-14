@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "clock.h"
 #include "mem.h"
 
 /* SipHash-2-4 초기화 상수 ("somepseudorandomlygeneratedbytes") */
@@ -209,6 +210,19 @@ void hash_table_rehash_step(struct hash_table *ht, size_t bucket_count)
             return;
         }
         move_bucket(ht);
+    }
+}
+
+/* 시계를 매 버킷마다 읽지 않도록 100개씩 옮긴 뒤에만 경과 시간을 확인한다.
+ * 그래서 예산을 최대 한 묶음만큼 넘길 수 있다 */
+void hash_table_rehash_for_ms(struct hash_table *ht, int64_t budget_ms)
+{
+    int64_t start_ms = clock_now_ms();
+    while (hash_table_is_rehashing(ht)) {
+        hash_table_rehash_step(ht, HT_REHASH_CHUNK_BUCKETS);
+        if (clock_now_ms() - start_ms >= budget_ms) {
+            return;
+        }
     }
 }
 

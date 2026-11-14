@@ -12,6 +12,7 @@ enum {
     HT_RANDOM_MAX_PROBES = 100,
     HT_SEED_BYTES = 16,
     HT_REHASH_EMPTY_VISITS = 10,
+    HT_REHASH_CHUNK_BUCKETS = 100,
 };
 
 enum ht_result {
@@ -62,6 +63,9 @@ bool hash_table_is_rehashing(const struct hash_table *ht);
 
 /* 비지 않은 버킷을 최대 bucket_count 개 옮긴다. 빈 버킷은 그 10배까지만 지나친다. */
 void hash_table_rehash_step(struct hash_table *ht, size_t bucket_count);
+
+/* budget_ms 동안 rehash 를 진행한다. 예산이 0 이어도 버킷 100개 한 묶음은 옮긴다. */
+void hash_table_rehash_for_ms(struct hash_table *ht, int64_t budget_ms);
 
 /* 키의 모든 바이트로 seed 를 넣은 SipHash-2-4 를 계산한다. 같은 seed 면 같은 값이다. */
 uint64_t hash_table_hash(const struct str *key);

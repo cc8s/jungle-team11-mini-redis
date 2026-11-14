@@ -66,6 +66,10 @@ void event_loop_set_timer(struct event_loop *loop, const struct el_timer *timer)
  * 멈추면 EL_OK, epoll / kqueue 가 실패하면 EL_SYSTEM_ERROR. */
 enum el_result event_loop_run(struct event_loop *loop);
 
+/* 한 바퀴만 돈다: 최대 max_wait_ms 기다리고, 온 이벤트와 때가 된 타이머를 처리한다.
+ * 테스트에서 서버와 클라이언트를 한 스레드로 번갈아 돌릴 때 쓴다. */
+enum el_result event_loop_run_once(struct event_loop *loop, int max_wait_ms);
+
 /* 지금 처리 중인 이벤트를 마친 뒤 run 이 반환하게 한다. handler 안에서 불러도 된다. */
 void event_loop_stop(struct event_loop *loop);
 

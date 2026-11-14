@@ -41,6 +41,17 @@ void buffer_clear(struct buffer *buf)
     buf->len = 0;
 }
 
+/* 처리한 앞부분을 버린다. 파이프라인은 한 번 처리할 때 모아서 한 번만 당긴다 */
+void buffer_consume(struct buffer *buf, size_t len)
+{
+    if (len >= buf->len) {
+        buf->len = 0;
+        return;
+    }
+    memmove(buf->data, buf->data + len, buf->len - len);
+    buf->len -= len;
+}
+
 /* 2배씩 늘려 append 를 평균 O(1) 로 만든다. mem 에 realloc 이 없어 새로 할당하고 복사한다.
  * 실패하면 기존 data 를 그대로 두므로 버퍼 내용이 사라지지 않는다 */
 static enum buffer_result reserve(struct buffer *buf, size_t extra_len)

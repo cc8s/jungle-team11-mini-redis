@@ -53,6 +53,7 @@ static volatile sig_atomic_t g_stop_signal_received = 0;
 static struct el_watch *find_watch(struct event_loop *loop, int fd);
 static enum el_result reserve_watches(struct event_loop *loop, int fd);
 static int compute_timeout_ms(const struct event_loop *loop);
+static enum el_result poll_and_dispatch(struct event_loop *loop, int timeout_ms);
 static void dispatch_fired(struct event_loop *loop, int fired_count);
 static void run_timer_if_due(struct event_loop *loop);
 static void handle_stop_signal(int signal_number);
@@ -145,15 +146,21 @@ enum el_result event_loop_run(struct event_loop *loop)
             g_stop_signal_received = 0;
             break;
         }
-        int fired_count = backend_poll(loop, compute_timeout_ms(loop));
-        if (fired_count < 0) {
+        if (poll_and_dispatch(loop, compute_timeout_ms(loop)) != EL_OK) {
             return EL_SYSTEM_ERROR;
         }
-        dispatch_fired(loop, fired_count);
-        run_timer_if_due(loop);
     }
     loop->should_stop = false;
     return EL_OK;
+}
+
+enum el_result event_loop_run_once(struct event_loop *loop, int max_wait_ms)
+{
+    int timeout_ms = compute_timeout_ms(loop);
+    if (timeout_ms == NO_TIMEOUT || timeout_ms > max_wait_ms) {
+        timeout_ms = max_wait_ms;
+    }
+    return poll_and_dispatch(loop, timeout_ms);
 }
 
 void event_loop_stop(struct event_loop *loop)
@@ -216,6 +223,17 @@ static int compute_timeout_ms(const struct event_loop *loop)
     }
     int64_t remaining_ms = loop->next_timer_ms - clock_now_ms();
     return remaining_ms > 0 ? (int)remaining_ms : 0;
+}
+
+static enum el_result poll_and_dispatch(struct event_loop *loop, int timeout_ms)
+{
+    int fired_count = backend_poll(loop, timeout_ms);
+    if (fired_count < 0) {
+        return EL_SYSTEM_ERROR;
+    }
+    dispatch_fired(loop, fired_count);
+    run_timer_if_due(loop);
+    return EL_OK;
 }
 
 /* handler 가 다른 fd 를 지웠을 수 있으므로 부르기 직전에 표를 다시 본다.

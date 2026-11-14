@@ -316,6 +316,26 @@ static void test_destroy_with_watches_returns_used_bytes(void)
     close_pipe(&p);
 }
 
+/* 이벤트가 없으면 max_wait_ms 만큼만 기다리고 돌아온다 */
+static void test_run_once_returns_after_events_or_wait(void)
+{
+    struct event_loop *loop = event_loop_create();
+    struct pipe_pair p = open_pipe();
+    struct record rec = {0};
+    add_watch(loop, p.read_fd, EL_READABLE, &rec);
+
+    int64_t start_ms = clock_now_ms();
+    CHECK(event_loop_run_once(loop, SHORT_RUN_MS) == EL_OK);
+    CHECK(clock_now_ms() - start_ms < SAFETY_TIMEOUT_MS);
+    CHECK(rec.read_count == 0);
+
+    write_byte(p.write_fd);
+    CHECK(event_loop_run_once(loop, SHORT_RUN_MS) == EL_OK);
+    CHECK(rec.read_count == 1);
+    event_loop_destroy(loop);
+    close_pipe(&p);
+}
+
 static void run_file_event_tests(void)
 {
     RUN(test_pipe_write_calls_read_handler_once);
@@ -326,6 +346,7 @@ static void run_file_event_tests(void)
     RUN(test_add_modify_remove_errors);
     RUN(test_high_fd_number_is_dispatched);
     RUN(test_destroy_with_watches_returns_used_bytes);
+    RUN(test_run_once_returns_after_events_or_wait);
 }
 
 static void run_timer_and_stop_tests(void)

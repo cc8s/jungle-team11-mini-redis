@@ -28,8 +28,12 @@ static void set_numbered_keys(struct db *db, const char *prefix, int count, int6
     for (int i = 0; i < count; i++) {
         char buf[KEY_BUF_BYTES];
         int len = snprintf(buf, sizeof(buf), "%s:%d", prefix, i);
-        struct str *key = str_create(buf, (size_t)len);
-        CHECK(db_set(db, key, str_create("v", 1)) == DB_OK);
+        struct db_set_request req = {
+            .key = str_create(buf, (size_t)len),
+            .value = str_create("v", 1),
+            .now_ms = NOW_MS,
+        };
+        CHECK(db_set(db, &req) == DB_OK);
         if (expire_at_ms == 0) {
             continue;
         }

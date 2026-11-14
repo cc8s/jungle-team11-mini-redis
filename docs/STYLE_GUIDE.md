@@ -48,6 +48,7 @@ C에는 클래스와 namespace 가 없으므로 **struct 가 클래스, 모듈 �
 | 가변 바이트 버퍼 | `buffer.c` | `buffer_` / 상수 `BUFFER_` |
 | 저장소 (키 + 만료 테이블) | `db.c` | `db_` / 상수 `DB_` |
 | 서버 · 설정 · 주기 작업 | `server.c` | `server_` / 상수 `SERVER_` |
+| 서버 설정 (환경변수) | `server_config.c` | `server_config_` / 상수 `SERVER_CONFIG_` |
 
 ### 1.3 RESP 명령 이름
 

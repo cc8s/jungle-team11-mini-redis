@@ -424,6 +424,21 @@ static void test_flushall_then_get_replies_while_freeing(void)
     server_destroy(server);
 }
 
+/* 설정의 maxmemory 가 db 까지 전달돼, 한도보다 큰 값은 OOM 으로 거절된다 */
+static void test_max_memory_config_reaches_db(void)
+{
+    struct server_config cfg;
+    server_config_init_default(&cfg);
+    cfg.max_memory_bytes = 1;
+    struct server *server = start_server(&cfg);
+    int fd = connect_client(server);
+    CHECK(exchange(server, fd, SET_KV,
+                   "-OOM command not allowed when used memory > 'maxmemory'.\r\n"));
+    CHECK(exchange(server, fd, GET_K, "$-1\r\n"));
+    close(fd);
+    server_destroy(server);
+}
+
 int main(void)
 {
     RUN(test_set_get_del_roundtrip);
@@ -441,6 +456,7 @@ int main(void)
     RUN(test_cron_finishes_rehash_without_access);
     RUN(test_cron_frees_flushed_keys_in_short_steps);
     RUN(test_flushall_then_get_replies_while_freeing);
+    RUN(test_max_memory_config_reaches_db);
     TEST_DONE();
     return 0;
 }

@@ -208,6 +208,76 @@ static void test_destroy_with_entries_returns_used_bytes_to_baseline(void)
     CHECK(mem_used_bytes() == baseline_bytes);
 }
 
+static enum db_result delete_text_if_expired(struct db *db, const char *key, int64_t now_ms)
+{
+    struct str *lookup = create_from_text(key);
+    enum db_result result = db_delete_if_expired(db, lookup, now_ms);
+    str_destroy(lookup);
+    return result;
+}
+
+static void test_delete_if_expired_on_expired_key_deletes_it(void)
+{
+    struct db *db = db_create();
+    set_text_with_ttl(db, "session", "abc");
+    CHECK(delete_text_if_expired(db, "session", EXPIRE_AT_MS) == DB_OK);
+    CHECK(db_count(db) == 0);
+    CHECK(db_ttl_count(db) == 0);
+    db_destroy(db);
+}
+
+static void test_delete_if_expired_before_expire_keeps_key(void)
+{
+    struct db *db = db_create();
+    set_text_with_ttl(db, "session", "abc");
+    CHECK(delete_text_if_expired(db, "session", EXPIRE_AT_MS - 1) == DB_NOT_FOUND);
+    CHECK(value_equals_text(get_text(db, "session", EXPIRE_AT_MS - 1), "abc"));
+    db_destroy(db);
+}
+
+static void test_delete_if_expired_without_ttl_keeps_key(void)
+{
+    struct db *db = db_create();
+    set_text(db, "name", "redis");
+    CHECK(delete_text_if_expired(db, "name", EXPIRE_AT_MS) == DB_NOT_FOUND);
+    CHECK(delete_text_if_expired(db, "missing", EXPIRE_AT_MS) == DB_NOT_FOUND);
+    CHECK(db_count(db) == 1);
+    db_destroy(db);
+}
+
+static void test_random_ttl_key_without_ttl_keys_returns_null(void)
+{
+    struct db *db = db_create();
+    CHECK(db_random_ttl_key(db) == NULL);
+    set_text(db, "name", "redis");
+    CHECK(db_random_ttl_key(db) == NULL);
+    db_destroy(db);
+}
+
+static void test_random_ttl_key_returns_only_ttl_key(void)
+{
+    struct db *db = db_create();
+    set_text(db, "name", "redis");
+    set_text_with_ttl(db, "session", "abc");
+    const struct str *key = db_random_ttl_key(db);
+    CHECK(key != NULL);
+    CHECK(value_equals_text(key, "session"));
+    CHECK(db_ttl_count(db) == 1);
+    db_destroy(db);
+}
+
+/* expires 가 소유한 키를 그대로 넘겨도 해제된 키를 읽지 않아야 한다 (valgrind 로 확인) */
+static void test_delete_if_expired_with_random_ttl_key_deletes_both(void)
+{
+    struct db *db = db_create();
+    set_text_with_ttl(db, "session", "abc");
+    const struct str *key = db_random_ttl_key(db);
+    CHECK(db_delete_if_expired(db, key, EXPIRE_AT_MS) == DB_OK);
+    CHECK(db_count(db) == 0);
+    CHECK(db_ttl_count(db) == 0);
+    db_destroy(db);
+}
+
 static void run_create_tests(void)
 {
     RUN(test_create_is_empty);
@@ -239,12 +309,23 @@ static void run_delete_tests(void)
     RUN(test_destroy_with_entries_returns_used_bytes_to_baseline);
 }
 
+static void run_active_expire_support_tests(void)
+{
+    RUN(test_delete_if_expired_on_expired_key_deletes_it);
+    RUN(test_delete_if_expired_before_expire_keeps_key);
+    RUN(test_delete_if_expired_without_ttl_keeps_key);
+    RUN(test_random_ttl_key_without_ttl_keys_returns_null);
+    RUN(test_random_ttl_key_returns_only_ttl_key);
+    RUN(test_delete_if_expired_with_random_ttl_key_deletes_both);
+}
+
 int main(void)
 {
     run_create_tests();
     run_set_get_tests();
     run_expire_tests();
     run_delete_tests();
+    run_active_expire_support_tests();
     TEST_DONE();
     return 0;
 }

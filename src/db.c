@@ -96,9 +96,38 @@ enum db_result db_delete(struct db *db, const struct str *key, int64_t now_ms)
     return was_expired ? DB_NOT_FOUND : DB_OK;
 }
 
+enum db_result db_delete_if_expired(struct db *db, const struct str *key, int64_t now_ms)
+{
+    if (!is_expired(db, key, now_ms)) {
+        return DB_NOT_FOUND;
+    }
+    delete_key(db, key);
+    return DB_OK;
+}
+
+const struct str *db_random_ttl_key(const struct db *db)
+{
+    const struct ht_entry *entry = hash_table_random_entry(db->expires);
+    if (entry == NULL) {
+        return NULL;
+    }
+    return entry->key;
+}
+
+void db_rehash_for_ms(struct db *db, int64_t budget_ms)
+{
+    hash_table_rehash_for_ms(db->keys, budget_ms);
+    hash_table_rehash_for_ms(db->expires, budget_ms);
+}
+
 size_t db_count(const struct db *db)
 {
     return hash_table_count(db->keys);
+}
+
+size_t db_ttl_count(const struct db *db)
+{
+    return hash_table_count(db->expires);
 }
 
 static void destroy_str_value(void *value)
@@ -117,9 +146,10 @@ static bool is_expired(const struct db *db, const struct str *key, int64_t now_m
     return now_ms >= *expire_at_ms;
 }
 
-/* 두 테이블에서 모두 지운다. expires 를 먼저 지워 불변식이 중간에도 깨지지 않게 한다 */
+/* 두 테이블에서 모두 지운다. key 가 db_random_ttl_key() 가 준 expires 소유의 키일 수 있으므로
+ * keys 를 먼저 지우고, 그 키를 해제하는 expires 삭제를 마지막에 한다 */
 static void delete_key(struct db *db, const struct str *key)
 {
-    hash_table_delete(db->expires, key);
     hash_table_delete(db->keys, key);
+    hash_table_delete(db->expires, key);
 }

@@ -211,6 +211,87 @@ entry *dict_get(dict *d, const char *key, size_t keylen)
     return find(d, key, keylen, d->hash(key, keylen), NULL, NULL);
 }
 
+/* ---- 무작위 엔트리 ---- */
+
+static int (*rand_impl)(void) = rand;
+
+void dict_set_rand(int (*rand_fn)(void))
+{
+    rand_impl = rand_fn != NULL ? rand_fn : rand;
+}
+
+entry *dict_random_entry(dict *d)
+{
+    if (dict_len(d) == 0)
+        return NULL;
+
+    entry *head;
+    do {
+        if (dict_is_rehashing(d)) {
+            /* ht[0] 의 rehashidx 앞은 이미 비었으므로 뺀다. 그 뒤로 ht[0] 나머지 + ht[1] 전체 */
+            size_t skip = (size_t)d->rehashidx;
+            size_t span = d->ht[0].size + d->ht[1].size - skip;
+            size_t idx = skip + (size_t)rand_impl() % span;
+            head = idx < d->ht[0].size ? d->ht[0].buckets[idx] : d->ht[1].buckets[idx - d->ht[0].size];
+        } else {
+            head = d->ht[0].buckets[(size_t)rand_impl() & d->ht[0].mask];
+        }
+    } while (head == NULL);
+
+    size_t len = 0;
+    for (entry *e = head; e != NULL; e = e->next)
+        len++;
+    size_t pick = (size_t)rand_impl() % len;
+    while (pick-- > 0)
+        head = head->next;
+    return head;
+}
+
+/* ---- 순회 ---- */
+
+void dict_iter_init(dict_iter *it, dict *d)
+{
+    it->d = d;
+    it->table = 0;
+    it->bucket = 0;
+    it->next = NULL;
+}
+
+entry *dict_iter_next(dict_iter *it)
+{
+    for (;;) {
+        if (it->next != NULL) {
+            entry *e = it->next;
+            it->next = e->next;
+            return e;
+        }
+        table *tb = &it->d->ht[it->table];
+        while (it->bucket < tb->size) {
+            entry *e = tb->buckets[it->bucket++];
+            if (e != NULL) {
+                it->next = e->next;
+                return e;
+            }
+        }
+        if (it->table == 0 && dict_is_rehashing(it->d)) {
+            it->table = 1;
+            it->bucket = 0;
+            continue;
+        }
+        return NULL;
+    }
+}
+
+/* ---- 전체 삭제 ---- */
+
+int dict_clear(dict *d)
+{
+    table_free(&d->ht[0]);
+    table_free(&d->ht[1]);
+    d->rehashidx = -1;
+    return table_init(&d->ht[0], DICT_INITIAL_SIZE);
+}
+
 int dict_del(dict *d, const char *key, size_t keylen)
 {
     if (dict_is_rehashing(d))

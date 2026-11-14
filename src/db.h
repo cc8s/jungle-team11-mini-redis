@@ -32,7 +32,20 @@ enum db_result db_set_expire(struct db *db, const struct str *key, int64_t expir
 /* 키를 지운다. 없거나 이미 만료된 키면 DB_NOT_FOUND 이다. */
 enum db_result db_delete(struct db *db, const struct str *key, int64_t now_ms);
 
+/* 만료된 키만 지운다. 지웠으면 DB_OK, 없거나 아직 만료 전이면 DB_NOT_FOUND 이다. */
+enum db_result db_delete_if_expired(struct db *db, const struct str *key, int64_t now_ms);
+
+/* TTL 이 있는 키 하나를 무작위로 반환한다. 없거나 못 찾으면 NULL.
+ * 키는 db 가 소유하며 다음 변경 연산까지만 유효하다. */
+const struct str *db_random_ttl_key(const struct db *db);
+
+/* 두 테이블의 rehash 를 각각 budget_ms 동안 진행한다. 주기 작업에서 부른다. */
+void db_rehash_for_ms(struct db *db, int64_t budget_ms);
+
 /* 저장된 키 수를 반환한다. 만료됐지만 아직 지우지 않은 키도 센다. */
 size_t db_count(const struct db *db);
+
+/* TTL 이 있는 키 수를 반환한다. */
+size_t db_ttl_count(const struct db *db);
 
 #endif

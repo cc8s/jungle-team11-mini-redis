@@ -74,6 +74,7 @@ static void grow_if_needed(struct hash_table *ht);
 static void shrink_if_needed(struct hash_table *ht);
 static void start_rehash(struct hash_table *ht, size_t new_bucket_count);
 static void rehash_all_now(struct hash_table *ht);
+static bool skip_empty_buckets(struct hash_table *ht, size_t *empty_visits_left);
 static void move_bucket(struct hash_table *ht);
 static void finish_rehash(struct hash_table *ht);
 static void replace_value(const struct hash_table *ht, struct ht_entry *entry, void *value);
@@ -112,8 +113,10 @@ void hash_table_destroy(struct hash_table *ht)
     mem_free(ht);
 }
 
+/* TODO(bloro): 3.4 에서 rehash 중에도 끝내지 않고 두 테이블을 다루도록 바꾼다 */
 enum ht_result hash_table_set(struct hash_table *ht, struct str *key, void *value)
 {
+    rehash_all_now(ht);
     struct ht_table *main_table = &ht->tables[0];
     struct ht_entry *existing = table_find(main_table, key);
     if (existing != NULL) {
@@ -135,11 +138,17 @@ enum ht_result hash_table_set(struct hash_table *ht, struct str *key, void *valu
 
 const struct ht_entry *hash_table_find(const struct hash_table *ht, const struct str *key)
 {
-    return table_find(&ht->tables[0], key);
+    const struct ht_entry *entry = table_find(&ht->tables[0], key);
+    if (entry == NULL) {
+        entry = table_find(&ht->tables[1], key);
+    }
+    return entry;
 }
 
+/* TODO(bloro): 3.4 에서 rehash 중에도 끝내지 않고 두 테이블을 다루도록 바꾼다 */
 enum ht_result hash_table_delete(struct hash_table *ht, const struct str *key)
 {
+    rehash_all_now(ht);
     struct ht_entry *entry = table_unlink(&ht->tables[0], key);
     if (entry == NULL) {
         return HT_NOT_FOUND;
@@ -149,9 +158,14 @@ enum ht_result hash_table_delete(struct hash_table *ht, const struct str *key)
     return HT_OK;
 }
 
+/* TODO(bloro): 3.4 에서 두 테이블의 엔트리 수에 비례해 고르도록 바꾼다 */
 const struct ht_entry *hash_table_random_entry(const struct hash_table *ht)
 {
-    return table_random_entry(&ht->tables[0]);
+    const struct ht_entry *entry = table_random_entry(&ht->tables[0]);
+    if (entry == NULL) {
+        entry = table_random_entry(&ht->tables[1]);
+    }
+    return entry;
 }
 
 size_t hash_table_count(const struct hash_table *ht)
@@ -161,12 +175,31 @@ size_t hash_table_count(const struct hash_table *ht)
 
 size_t hash_table_bucket_count(const struct hash_table *ht)
 {
+    if (hash_table_is_rehashing(ht)) {
+        return ht->tables[1].bucket_count;
+    }
     return ht->tables[0].bucket_count;
 }
 
 bool hash_table_is_rehashing(const struct hash_table *ht)
 {
     return ht->rehash_idx != NOT_REHASHING;
+}
+
+/* 이벤트 루프가 한 번에 오래 막히지 않도록 옮기는 버킷 수와 지나치는 빈 버킷 수를 모두 제한한다 */
+void hash_table_rehash_step(struct hash_table *ht, size_t bucket_count)
+{
+    size_t empty_visits_left = bucket_count * HT_REHASH_EMPTY_VISITS;
+    for (size_t moved = 0; moved < bucket_count && hash_table_is_rehashing(ht); moved++) {
+        if (ht->tables[0].entry_count == 0) {
+            finish_rehash(ht);
+            return;
+        }
+        if (!skip_empty_buckets(ht, &empty_visits_left)) {
+            return;
+        }
+        move_bucket(ht);
+    }
 }
 
 uint64_t hash_table_hash(const struct str *key)
@@ -344,18 +377,31 @@ static void start_rehash(struct hash_table *ht, size_t new_bucket_count)
         return;
     }
     ht->rehash_idx = 0;
-    rehash_all_now(ht);
 }
 
-/* TODO(bloro): 3.3 에서 연산마다 버킷 몇 개씩만 옮기는 rehash_step 으로 바꾼다 */
 static void rehash_all_now(struct hash_table *ht)
 {
     while (hash_table_is_rehashing(ht)) {
-        move_bucket(ht);
+        hash_table_rehash_step(ht, ht->tables[0].bucket_count);
     }
 }
 
-/* tables[0] 의 rehash_idx 번 버킷을 tables[1] 로 옮기고, 마지막이면 rehash 를 끝낸다 */
+/* rehash_idx 를 비지 않은 버킷까지 옮긴다. 예산을 다 쓰면 false.
+ * tables[0] 에 엔트리가 남아 있으면 rehash_idx 이후에 비지 않은 버킷이 반드시 있다 */
+static bool skip_empty_buckets(struct hash_table *ht, size_t *empty_visits_left)
+{
+    const struct ht_table *src = &ht->tables[0];
+    while (src->buckets[ht->rehash_idx] == NULL) {
+        if (*empty_visits_left == 0) {
+            return false;
+        }
+        (*empty_visits_left)--;
+        ht->rehash_idx++;
+    }
+    return true;
+}
+
+/* tables[0] 의 rehash_idx 번 버킷을 tables[1] 로 옮기고, tables[0] 이 비면 rehash 를 끝낸다 */
 static void move_bucket(struct hash_table *ht)
 {
     struct ht_table *src = &ht->tables[0];
@@ -369,7 +415,7 @@ static void move_bucket(struct hash_table *ht)
         entry = next;
     }
     ht->rehash_idx++;
-    if ((size_t)ht->rehash_idx == src->bucket_count) {
+    if (src->entry_count == 0) {
         finish_rehash(ht);
     }
 }

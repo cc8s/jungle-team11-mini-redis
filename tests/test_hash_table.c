@@ -779,13 +779,79 @@ static void test_create_is_not_rehashing(void)
     hash_table_destroy(ht);
 }
 
-static void test_grow_and_shrink_leave_table_not_rehashing(void)
+enum {
+    REHASH_STEP_LIMIT = 1000000,
+    GROWN_SIZE = HT_INITIAL_SIZE * 2,
+    LAST_BUCKET_IDX = GROWN_SIZE - 1,
+    LAST_BUCKET_KEY_COUNT = 3,
+    FILLER_KEY_COUNT = HT_INITIAL_SIZE + 1 - LAST_BUCKET_KEY_COUNT,
+};
+
+/* rehash 가 끝날 때까지 rehash_step(ht, 1) 을 부르고 부른 횟수를 돌려준다 */
+static size_t run_rehash_to_end(struct hash_table *ht)
+{
+    size_t step_count = 0;
+    while (hash_table_is_rehashing(ht) && step_count < REHASH_STEP_LIMIT) {
+        hash_table_rehash_step(ht, 1);
+        step_count++;
+    }
+    return step_count;
+}
+
+/* key:0 ~ key:16 을 넣어 늘리기를 시작시키고, 엔트리(노드 + 키)가 차지하는 바이트를 돌려준다 */
+static size_t set_keys_until_grow(struct hash_table *ht, void *value)
+{
+    size_t entry_bytes = 0;
+    for (int i = 0; i <= HT_INITIAL_SIZE; i++) {
+        struct str *key = create_numbered_key(i);
+        entry_bytes += sizeof(struct ht_entry) + sizeof(*key) + key->len + 1;
+        hash_table_set(ht, key, value);
+    }
+    return entry_bytes;
+}
+
+/* 32칸 테이블의 마지막 버킷(31번)에 떨어지는 키를 count 개 만든다 */
+static void create_last_bucket_keys(struct str **keys, size_t count)
+{
+    size_t found = 0;
+    for (int i = 0; found < count && i < COLLISION_SEARCH_LIMIT; i++) {
+        char buf[KEY_BUF_BYTES];
+        int len = snprintf(buf, sizeof(buf), "last:%d", i);
+        struct str *key = str_create(buf, (size_t)len);
+        if ((hash_table_hash(key) & LAST_BUCKET_IDX) == LAST_BUCKET_IDX) {
+            keys[found++] = key;
+        } else {
+            str_destroy(key);
+        }
+    }
+    CHECK(found == count);
+}
+
+/* 32칸으로 늘린 뒤 채움 키를 지워, 31번 버킷에만 키 3개가 남은 채로 줄이기 rehash 가 막 시작된
+ * 테이블 */
+static struct hash_table *create_shrinking_table_with_last_bucket_keys(void)
+{
+    static int value = 1;
+    struct str *last_keys[LAST_BUCKET_KEY_COUNT];
+    create_last_bucket_keys(last_keys, LAST_BUCKET_KEY_COUNT);
+    struct hash_table *ht = hash_table_create(ignore_value);
+    for (size_t i = 0; i < LAST_BUCKET_KEY_COUNT; i++) {
+        hash_table_set(ht, last_keys[i], &value);
+    }
+    set_numbered_keys(ht, FILLER_KEY_COUNT, &value);
+    delete_numbered_keys(ht, 0, FILLER_KEY_COUNT);
+    return ht;
+}
+
+static void test_grow_and_shrink_then_rehash_to_end_is_not_rehashing(void)
 {
     static int value = 1;
     struct hash_table *ht = hash_table_create(ignore_value);
     set_numbered_keys(ht, CHURN_KEY_COUNT, &value);
+    run_rehash_to_end(ht);
     CHECK(!hash_table_is_rehashing(ht));
     delete_numbered_keys(ht, 0, CHURN_KEY_COUNT);
+    run_rehash_to_end(ht);
     CHECK(!hash_table_is_rehashing(ht));
     hash_table_destroy(ht);
 }
@@ -796,16 +862,12 @@ static void test_grow_keeps_only_one_bucket_array(void)
     static int value = 1;
     struct hash_table *ht = hash_table_create(ignore_value);
     size_t created_bytes = mem_used_bytes();
-    size_t entry_bytes = 0;
-    for (int i = 0; i <= HT_INITIAL_SIZE; i++) {
-        struct str *key = create_numbered_key(i);
-        entry_bytes += sizeof(struct ht_entry) + sizeof(*key) + key->len + 1;
-        hash_table_set(ht, key, &value);
-    }
-    size_t grown_bucket_bytes = (size_t)HT_INITIAL_SIZE * sizeof(struct ht_entry *);
-    CHECK(hash_table_bucket_count(ht) == (size_t)HT_INITIAL_SIZE * 2);
+    size_t entry_bytes = set_keys_until_grow(ht, &value);
+    run_rehash_to_end(ht);
+    size_t added_bucket_bytes = (size_t)(GROWN_SIZE - HT_INITIAL_SIZE) * sizeof(struct ht_entry *);
+    CHECK(hash_table_bucket_count(ht) == GROWN_SIZE);
     CHECK(!hash_table_is_rehashing(ht));
-    CHECK(mem_used_bytes() == created_bytes + entry_bytes + grown_bucket_bytes);
+    CHECK(mem_used_bytes() == created_bytes + entry_bytes + added_bucket_bytes);
     hash_table_destroy(ht);
 }
 
@@ -816,9 +878,82 @@ static void test_shrink_keeps_only_one_bucket_array(void)
     size_t created_bytes = mem_used_bytes();
     set_numbered_keys(ht, CHURN_KEY_COUNT, &value);
     delete_numbered_keys(ht, 0, CHURN_KEY_COUNT);
+    run_rehash_to_end(ht);
     CHECK(hash_table_bucket_count(ht) == HT_INITIAL_SIZE);
     CHECK(!hash_table_is_rehashing(ht));
     CHECK(mem_used_bytes() == created_bytes);
+    hash_table_destroy(ht);
+}
+
+/* 초과 직후: rehash 중이고, 옛 16칸과 새 32칸 배열이 함께 있으며, 키는 모두 조회된다 */
+static void test_load_factor_exceeded_starts_rehash_with_both_arrays(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    size_t created_bytes = mem_used_bytes();
+    size_t entry_bytes = set_keys_until_grow(ht, &value);
+    size_t new_bucket_bytes = (size_t)GROWN_SIZE * sizeof(struct ht_entry *);
+    CHECK(hash_table_is_rehashing(ht));
+    CHECK(hash_table_bucket_count(ht) == GROWN_SIZE);
+    CHECK(mem_used_bytes() == created_bytes + entry_bytes + new_bucket_bytes);
+    CHECK(is_all_numbered_found(ht, 0, HT_INITIAL_SIZE + 1));
+    hash_table_destroy(ht);
+}
+
+static void test_rehash_step_zero_moves_nothing(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    set_keys_until_grow(ht, &value);
+    size_t before_bytes = mem_used_bytes();
+    hash_table_rehash_step(ht, 0);
+    CHECK(hash_table_is_rehashing(ht));
+    CHECK(mem_used_bytes() == before_bytes);
+    hash_table_destroy(ht);
+}
+
+static void test_rehash_step_one_bucket_keeps_rehashing(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    set_keys_until_grow(ht, &value);
+    hash_table_rehash_step(ht, 1);
+    CHECK(hash_table_is_rehashing(ht));
+    CHECK(hash_table_count(ht) == HT_INITIAL_SIZE + 1);
+    CHECK(is_all_numbered_found(ht, 0, HT_INITIAL_SIZE + 1));
+    hash_table_destroy(ht);
+}
+
+static void test_rehash_step_all_buckets_finishes_in_one_call(void)
+{
+    static int value = 1;
+    struct hash_table *ht = hash_table_create(ignore_value);
+    set_keys_until_grow(ht, &value);
+    hash_table_rehash_step(ht, HT_INITIAL_SIZE);
+    CHECK(!hash_table_is_rehashing(ht));
+    CHECK(hash_table_bucket_count(ht) == GROWN_SIZE);
+    CHECK(is_all_numbered_found(ht, 0, HT_INITIAL_SIZE + 1));
+    hash_table_destroy(ht);
+}
+
+/* 0~30번이 비고 31번에만 키가 있으면 한 번에 빈 버킷 10개씩만 지나쳐 4번 만에 끝난다 */
+static void test_rehash_step_limits_empty_bucket_visits(void)
+{
+    struct hash_table *ht = create_shrinking_table_with_last_bucket_keys();
+    CHECK(hash_table_is_rehashing(ht));
+    CHECK(hash_table_count(ht) == LAST_BUCKET_KEY_COUNT);
+    CHECK(run_rehash_to_end(ht) == LAST_BUCKET_IDX / HT_REHASH_EMPTY_VISITS + 1);
+    CHECK(hash_table_bucket_count(ht) == HT_INITIAL_SIZE);
+    CHECK(hash_table_count(ht) == LAST_BUCKET_KEY_COUNT);
+    hash_table_destroy(ht);
+}
+
+static void test_rehash_step_when_not_rehashing_does_nothing(void)
+{
+    struct hash_table *ht = hash_table_create(ignore_value);
+    hash_table_rehash_step(ht, HT_INITIAL_SIZE);
+    CHECK(!hash_table_is_rehashing(ht));
+    CHECK(hash_table_bucket_count(ht) == HT_INITIAL_SIZE);
     hash_table_destroy(ht);
 }
 
@@ -899,9 +1034,19 @@ static void run_resize_tests(void)
 static void run_two_table_tests(void)
 {
     RUN(test_create_is_not_rehashing);
-    RUN(test_grow_and_shrink_leave_table_not_rehashing);
+    RUN(test_grow_and_shrink_then_rehash_to_end_is_not_rehashing);
     RUN(test_grow_keeps_only_one_bucket_array);
     RUN(test_shrink_keeps_only_one_bucket_array);
+}
+
+static void run_rehash_step_tests(void)
+{
+    RUN(test_load_factor_exceeded_starts_rehash_with_both_arrays);
+    RUN(test_rehash_step_zero_moves_nothing);
+    RUN(test_rehash_step_one_bucket_keeps_rehashing);
+    RUN(test_rehash_step_all_buckets_finishes_in_one_call);
+    RUN(test_rehash_step_limits_empty_bucket_visits);
+    RUN(test_rehash_step_when_not_rehashing_does_nothing);
 }
 
 int main(void)
@@ -913,6 +1058,7 @@ int main(void)
     run_random_entry_tests();
     run_resize_tests();
     run_two_table_tests();
+    run_rehash_step_tests();
     TEST_DONE();
     return 0;
 }

@@ -12,6 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: make
       - run: make test
+      - run: make itest
 
   asan:
     runs-on: ubuntu-22.04

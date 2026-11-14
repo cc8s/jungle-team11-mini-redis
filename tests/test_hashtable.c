@@ -336,6 +336,181 @@ static void test_many_keys(void)
     dict_free(d);
 }
 
+/* ---- 무작위 엔트리 (active 만료 샘플링용) ---- */
+
+/* 0,1,2,... 를 차례로 돌려주는 난수. 어떤 버킷·노드가 뽑힐지 정할 수 있다 */
+static int seq_next = 0;
+static int seq_rand(void)
+{
+    return seq_next++;
+}
+
+/* 키 이름(10진수 한 자리)으로 seen[] 에 표시 */
+static void mark(int *seen, const entry *e)
+{
+    CHECK(e != NULL);
+    CHECK(e->keylen == 1 && e->key[0] >= '0' && e->key[0] <= '9');
+    seen[e->key[0] - '0']++;
+}
+
+/* TC-HT-017 EP: 빈 테이블에서는 NULL */
+static void test_random_empty(void)
+{
+    dict *d = dict_create();
+    CHECK(dict_random_entry(d) == NULL);
+    set_s(d, "a", "1");
+    del_s(d, "a");
+    CHECK(dict_random_entry(d) == NULL);
+    dict_free(d);
+}
+
+/* TC-HT-018 EP: 있는 키만 나오고, 여러 번 뽑으면 모든 키가 나온다 */
+static void test_random_covers_all(void)
+{
+    dict_set_rand(NULL); /* 진짜 rand */
+    srand(1);
+    dict *d = dict_create();
+    char k[2] = "0";
+    for (int i = 0; i < 10; i++) {
+        k[0] = (char)('0' + i);
+        set_s(d, k, k);
+    }
+    int seen[10] = {0};
+    for (int i = 0; i < 2000; i++)
+        mark(seen, dict_random_entry(d));
+    for (int i = 0; i < 10; i++)
+        CHECK(seen[i] > 0);
+    dict_free(d);
+}
+
+/* TC-HT-019 ST: rehash 도중에도 두 테이블의 키가 모두 나오고, rehash 는 진행시키지 않는다 */
+static void test_random_during_rehash(void)
+{
+    dict *d = full_four();
+    set_s(d, "4", "v4");
+    dict_rehash_step(d, 2); /* ht[0]: "2","3" / ht[1]: "4","0","1" */
+    CHECK(d->rehashidx == 2);
+
+    /* 순차 난수(seq_rand)는 쓰지 않는다. 한 번 뽑을 때 버킷·체인에 하나씩 쓰여 짝·홀이 갈리고,
+     * 버킷 위치가 10칸 주기라 홀수 위치 버킷("3", "1")은 영원히 안 뽑힌다(처음 이 테스트가 그렇게 실패함). */
+    dict_set_rand(NULL);
+    srand(2);
+    int seen[10] = {0};
+    for (int i = 0; i < 2000; i++)
+        mark(seen, dict_random_entry(d));
+    for (int i = 0; i <= 4; i++)
+        CHECK(seen[i] > 0);
+    for (int i = 5; i < 10; i++)
+        CHECK(seen[i] == 0);
+    CHECK(d->rehashidx == 2); /* 진행시키지 않음 */
+    CHECK(dict_len(d) == 5);
+    dict_free(d);
+}
+
+/* TC-HT-020 EG: 한 체인에 여러 노드가 있으면 체인 안에서도 고른다 (첫 노드만 나오면 안 됨) */
+static void test_random_within_chain(void)
+{
+    dict *d = dict_create_with_hash(const_hash); /* 전부 한 버킷 */
+    set_s(d, "1", "1");
+    set_s(d, "2", "2");
+    set_s(d, "3", "3");
+    dict_set_rand(seq_rand);
+    seq_next = 0;
+    int seen[10] = {0};
+    for (int i = 0; i < 60; i++)
+        mark(seen, dict_random_entry(d));
+    CHECK(seen[1] > 0 && seen[2] > 0 && seen[3] > 0);
+    dict_set_rand(NULL);
+    dict_free(d);
+}
+
+/* ---- 순회 (KEYS 용) ---- */
+
+/* TC-HT-021 EP: 키 1000개를 정확히 한 번씩 */
+static void test_iter_all_once(void)
+{
+    dict *d = dict_create();
+    char k[16];
+    for (int i = 0; i < 1000; i++) {
+        snprintf(k, sizeof k, "%d", i);
+        set_s(d, k, "v");
+    }
+    static int seen[1000];
+    memset(seen, 0, sizeof seen);
+    dict_iter it;
+    dict_iter_init(&it, d);
+    int n = 0;
+    for (entry *e = dict_iter_next(&it); e != NULL; e = dict_iter_next(&it)) {
+        char buf[16];
+        memcpy(buf, e->key, e->keylen);
+        buf[e->keylen] = '\0';
+        int i = atoi(buf);
+        CHECK(i >= 0 && i < 1000);
+        seen[i]++;
+        n++;
+    }
+    CHECK(n == 1000);
+    for (int i = 0; i < 1000; i++)
+        CHECK(seen[i] == 1);
+    dict_free(d);
+}
+
+/* TC-HT-022 ST: rehash 도중에는 두 테이블을 합쳐 정확히 한 번씩, rehash 는 진행시키지 않는다 */
+static void test_iter_during_rehash(void)
+{
+    dict *d = full_four();
+    set_s(d, "4", "v4");
+    dict_rehash_step(d, 1); /* ht[0]: "1","2","3" / ht[1]: "4","0" */
+    int seen[10] = {0};
+    dict_iter it;
+    dict_iter_init(&it, d);
+    for (entry *e = dict_iter_next(&it); e != NULL; e = dict_iter_next(&it))
+        mark(seen, e);
+    for (int i = 0; i <= 4; i++)
+        CHECK(seen[i] == 1);
+    CHECK(d->rehashidx == 1);
+    dict_free(d);
+}
+
+/* TC-HT-023 BVA: 빈 테이블 순회는 바로 끝나고, 끝난 뒤 다시 불러도 NULL */
+static void test_iter_empty(void)
+{
+    dict *d = dict_create();
+    dict_iter it;
+    dict_iter_init(&it, d);
+    CHECK(dict_iter_next(&it) == NULL);
+    CHECK(dict_iter_next(&it) == NULL);
+    dict_free(d);
+}
+
+/* ---- 전체 삭제 (FLUSHALL 용) ---- */
+
+/* TC-HT-024 ST: rehash 도중에 비워도 처음 상태로 돌아가고, 다시 쓸 수 있다 */
+static void test_clear(void)
+{
+    dict *d = dict_create();
+    char k[16];
+    for (int i = 0; i < 100; i++) {
+        snprintf(k, sizeof k, "k%d", i);
+        set_s(d, k, k);
+    }
+    CHECK(dict_is_rehashing(d) || d->ht[0].size > DICT_INITIAL_SIZE);
+    CHECK(dict_clear(d) == 0);
+    CHECK(dict_len(d) == 0);
+    CHECK(!dict_is_rehashing(d));
+    CHECK(d->ht[0].size == DICT_INITIAL_SIZE);
+    CHECK(d->ht[1].buckets == NULL && d->ht[1].size == 0);
+    CHECK(get_s(d, "k1") == NULL);
+    CHECK(dict_random_entry(d) == NULL);
+
+    CHECK(set_s(d, "again", "1") == 1);
+    CHECK(val_is(get_s(d, "again"), "1"));
+    CHECK(dict_len(d) == 1);
+    CHECK(dict_clear(d) == 0);
+    CHECK(dict_clear(d) == 0); /* 빈 테이블을 또 비워도 됨 */
+    dict_free(d);
+}
+
 int main(void)
 {
     RUN(test_set_then_get);
@@ -354,6 +529,14 @@ int main(void)
     RUN(test_each_op_advances_rehash);
     RUN(test_step_when_not_rehashing);
     RUN(test_many_keys);
+    RUN(test_random_empty);
+    RUN(test_random_covers_all);
+    RUN(test_random_during_rehash);
+    RUN(test_random_within_chain);
+    RUN(test_iter_all_once);
+    RUN(test_iter_during_rehash);
+    RUN(test_iter_empty);
+    RUN(test_clear);
     TEST_DONE();
     return 0;
 }

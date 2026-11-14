@@ -23,7 +23,7 @@
 #include <stddef.h>
 #include "buf.h"
 
-#define RESP_MAX_MULTIBULK (1024L * 1024)        /* 1,048,576 */
+#define RESP_MAX_MULTIBULK 2147483647L           /* INT_MAX. 메모리는 입력 버퍼 한도가 막는다 */
 #define RESP_MAX_BULK (512L * 1024 * 1024)       /* 512MB */
 #define RESP_MAX_INLINE (64L * 1024)             /* 64KB */
 

@@ -168,12 +168,16 @@ static void test_bad_bulk_length(void)
     }
 }
 
-/* TC-RESP-011 BVA·EG: 배열 원소 수 */
+/* TC-RESP-011 BVA·EG: 배열 원소 수. 상한은 INT_MAX (진짜 Redis 7+ 와 같음).
+ * 처음에는 1,048,576 을 "Redis 와 같은 값"으로 적었으나 옛 버전의 값이었다 — 차등 테스트(TC-DIFF-012)가 잡음.
+ * 선언만으로는 메모리를 잡지 않으므로(2단계 파싱) 큰 원소 수도 기다리기만 한다. */
 static void test_multibulk_limit(void)
 {
-    result r = PARSE_S("*1048576\r\n$4\r\nPING\r\n");
+    result r = PARSE_S("*1048577\r\n$4\r\nPING\r\n");
+    CHECK(r.st == RESP_INCOMPLETE);
+    r = PARSE_S("*2147483647\r\n");
     CHECK(r.st == RESP_INCOMPLETE); /* 한도 안: 나머지를 기다림 */
-    r = PARSE_S("*1048577\r\n");
+    r = PARSE_S("*2147483648\r\n");
     CHECK(err_has(&r, "invalid multibulk length"));
     r = PARSE_S("*abc\r\n");
     CHECK(err_has(&r, "invalid multibulk length"));

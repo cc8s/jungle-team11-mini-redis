@@ -45,6 +45,7 @@ C에는 클래스와 namespace 가 없으므로 **struct 가 클래스, 모듈 �
 | 바이너리 안전 문자열 | `str.c` | `str_` |
 | 시각 | `clock.c` | `clock_` |
 | 메모리 래퍼 | `mem.c` | `mem_` |
+| 가변 바이트 버퍼 | `buffer.c` | `buffer_` / 상수 `BUFFER_` |
 | 저장소 (키 + 만료 테이블) | `db.c` | `db_` / 상수 `DB_` |
 | 서버 · 설정 · 주기 작업 | `server.c` | `server_` / 상수 `SERVER_` |
 

@@ -17,8 +17,8 @@
 | 파일 | `snake_case`, 모듈 단위 | `hash_table.c`, `hash_table.h`, `event_loop.c` |
 | 테스트 파일 | `test_<모듈>.c` | `tests/test_hash_table.c` |
 | 구조체 (클래스 역할) | `snake_case` 명사 | `struct hash_table`, `struct client_conn` |
-| enum 타입 | `snake_case` 명사 | `enum ht_result`, `enum http_method` |
-| enum 값 | `UPPER_SNAKE_CASE`, 타입 접두사 | `HT_OK`, `HT_NOT_FOUND`, `HTTP_METHOD_PUT` |
+| enum 타입 | `snake_case` 명사 | `enum ht_result`, `enum resp_parse_result` |
+| enum 값 | `UPPER_SNAKE_CASE`, 타입 접두사 | `HT_OK`, `HT_NOT_FOUND`, `RESP_PARSE_DONE` |
 | 함수 (공개) | `<모듈>_<동사>[_<목적어>]` | `hash_table_find()`, `conn_write_reply()` |
 | 함수 (내부) | `static`, 동사로 시작 | `static void rehash_step(...)` |
 | 변수 · 필드 · 파라미터 | `snake_case` 명사 | `bucket_count`, `expire_at_ms` |
@@ -39,18 +39,25 @@ C에는 클래스와 namespace 가 없으므로 **struct 가 클래스, 모듈 �
 | 해시 테이블 | `hash_table.c` | `hash_table_` / 상수 `HT_` |
 | 이벤트 루프 | `event_loop.c` | `event_loop_` / 상수 `EL_` |
 | 클라이언트 연결 | `client_conn.c` | `conn_` / 상수 `CONN_` |
-| HTTP 파서 · 응답 | `http.c` | `http_` / 상수 `HTTP_` |
-| 라우팅 (`/keys/{key}`) | `router.c` | `router_` / 상수 `ROUTER_` |
+| RESP 파서 · 응답 직렬화 | `resp.c` | `resp_` / 상수 `RESP_` |
+| 명령 처리 (`SET`, `GET`, `DEL` ...) | `command.c` | `command_` / 상수 `COMMAND_` |
 | 만료 | `expire.c` | `expire_` / 상수 `EXPIRE_` |
+| 바이너리 안전 문자열 | `str.c` | `str_` |
+| 시각 | `clock.c` | `clock_` |
+| 메모리 래퍼 | `mem.c` | `mem_` |
+| 저장소 (키 + 만료 테이블) | `db.c` | `db_` / 상수 `DB_` |
+| 서버 · 설정 · 주기 작업 | `server.c` | `server_` / 상수 `SERVER_` |
 
-### 1.3 HTTP 인터페이스 이름
+### 1.3 RESP 명령 이름
+
+명령과 응답은 실제 Redis 와 같게 맞춰서 `redis-cli`, `redis-py` 가 그대로 동작하게 한다.
 
 | 대상 | 규칙 | 예시 |
 |---|---|---|
-| URL 경로 | `kebab-case`, 리소스는 복수 명사 | `/keys/{key}`, `/admin/flush-all` |
-| 쿼리 파라미터 | `snake_case` | `?ttl=60` |
-| 커스텀 응답 헤더 | `X-` + `Pascal-Kebab-Case` | `X-Ttl-Ms` |
-| JSON 필드 (쓰는 경우) | `snake_case` | `"expire_at_ms"` |
+| 명령 이름 | Redis 와 같은 이름, 대소문자 구분 없이 받는다 | `SET`, `GET`, `DEL` |
+| 명령 옵션 | Redis 와 같은 이름, 대소문자 구분 없이 받는다 | `EX` |
+| 에러 응답 | Redis 와 같은 접두어 + 메시지 | `-ERR unknown command 'foo'`, `-OOM ...` |
+| 명령 처리 함수 | `static`, `handle_<명령>_command` | `handle_set_command()` |
 
 ### 1.4 이름 짓는 원칙
 
@@ -74,7 +81,7 @@ void hash_table_clear(struct hash_table *ht);
 int64_t ttl_ms;          /* 기간 */
 int64_t expire_at_ms;    /* 절대 시각 */
 int timeout_ms;
-size_t max_body_bytes;
+size_t max_bulk_bytes;
 ```
 
 **길이와 용량을 구분한다.** `len` 은 사용 중인 크기, `cap` 은 할당된 크기다.
@@ -103,7 +110,7 @@ struct buffer {
 | `len` | length | `cap` | capacity |
 | `conn` | connection | `ctx` | context |
 | `cfg` | config | `ht` | hash table |
-| `fd` | file descriptor | `req` / `res` | request / response |
+| `fd` | file descriptor | `cmd` | command |
 | `ms` / `sec` | millisecond / second | `err` | error |
 
 반복문 인덱스 `i`, `j` 는 범위가 몇 줄 안 될 때만 허용한다.
@@ -124,7 +131,7 @@ struct buffer {
 
 ```c
 /* Bad */
-int server_start(const char *host, int port, int backlog, int max_clients, size_t max_body);
+int server_start(const char *host, int port, int backlog, int max_clients, size_t max_bulk);
 
 /* Good */
 struct server_config {
@@ -132,7 +139,7 @@ struct server_config {
     int port;
     int backlog;
     int max_clients;
-    size_t max_body_bytes;
+    size_t max_bulk_bytes;
 };
 
 int server_start(struct server *server, const struct server_config *cfg);
@@ -181,19 +188,19 @@ enum ht_result {
 ### 2.3 함수는 한 가지 일만 한다
 
 - 기준은 **40줄 이하, 중첩 3단계 이하**다. 넘으면 내부 `static` 함수로 쪼갠다.
-- 한 함수 안에서는 추상화 수준을 맞춘다. 고수준 흐름(`parse` → `dispatch` → `reply`) 사이에 바이트 단위 처리가 끼어 있으면 따로 뺀다.
+- 한 함수 안에서는 추상화 수준을 맞춘다. 고수준 흐름(`parse` → `execute` → `reply`) 사이에 바이트 단위 처리가 끼어 있으면 따로 뺀다.
 - 예외 상황은 **early return** 으로 먼저 처리해서 중첩을 줄인다.
 
 ```c
-int conn_handle_request(struct client_conn *conn)
+int conn_handle_command(struct client_conn *conn)
 {
-    struct http_request *req = http_request_parse(&conn->read_buf);
-    if (req == NULL) {
-        return conn_reply_status(conn, HTTP_STATUS_BAD_REQUEST);
+    struct resp_command *cmd = resp_command_parse(&conn->read_buf);
+    if (cmd == NULL) {
+        return conn_reply_error(conn, "ERR Protocol error");
     }
 
-    int result = router_dispatch(conn, req);
-    http_request_destroy(req);
+    int result = command_execute(conn, cmd);
+    resp_command_destroy(cmd);
     return result;
 }
 ```
@@ -291,7 +298,7 @@ size_t hash_table_count(const struct hash_table *ht);
 1. 자기 자신의 헤더 (`hash_table.c` 라면 `"hash_table.h"`) — 헤더가 혼자서도 컴파일되는지 확인하는 효과가 있다
 2. C 표준 라이브러리 (`<stdio.h>`, `<stdlib.h>`)
 3. 시스템 헤더 (`<sys/epoll.h>`, `<unistd.h>`)
-4. 프로젝트 헤더 (`"http.h"`)
+4. 프로젝트 헤더 (`"resp.h"`)
 
 ### 4.3 파일 안의 순서
 
@@ -349,11 +356,13 @@ static size_t bucket_index(const struct hash_table *ht, uint64_t hash)
     return hash & (ht->bucket_count - 1);
 }
 
-switch (req->method) {
-case HTTP_METHOD_GET:
-    return handle_get_key(conn, req);
+switch (parse_result) {
+case RESP_PARSE_DONE:
+    return execute_command(conn, &cmd);
+case RESP_PARSE_NEED_MORE:
+    return 0;
 default:
-    return conn_reply_status(conn, HTTP_STATUS_METHOD_NOT_ALLOWED);
+    return conn_reply_error(conn, "ERR Protocol error");
 }
 ```
 

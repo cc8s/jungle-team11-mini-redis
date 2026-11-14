@@ -15,7 +15,7 @@ LIB_SRCS := $(filter-out src/main.c, $(SRCS))
 LIB_OBJS := $(patsubst src/%.c, $(BUILD)/%.o, $(LIB_SRCS))
 TESTS    := $(patsubst tests/%.c, $(TBIN)/%, $(wildcard tests/test_*.c))
 
-.PHONY: all test itest asan run clean
+.PHONY: all test itest difftest asan run clean
 
 all: $(BIN)
 
@@ -38,6 +38,11 @@ test: $(TESTS)
 # 통합 테스트: 진짜 서버 프로세스를 띄워 소켓으로 확인 (python3 표준 라이브러리만)
 itest: $(BIN)
 	python3 tests/integration/test_server.py ./$(BIN)
+
+# 차등 테스트: 같은 명령을 진짜 Redis(7 이상)와 mini-redis 에 보내 응답 바이트 비교
+REDIS_SERVER ?= redis-server
+difftest: $(BIN)
+	python3 tests/integration/test_diff.py ./$(BIN) $(REDIS_SERVER)
 
 asan:
 	$(MAKE) test BUILD=build/asan TBIN=tests/bin/asan EXTRA_CFLAGS="$(SAN)" EXTRA_LDFLAGS="$(SAN)"

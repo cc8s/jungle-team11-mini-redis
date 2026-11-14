@@ -1,13 +1,18 @@
 #include "resp.h"
 
+#include <inttypes.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "mem.h"
 
 enum {
     DECIMAL_BASE = 10,
+    HEADER_BUF_BYTES = 32,
 };
+
+static const char CRLF[] = "\r\n";
 
 /* 버퍼를 앞에서부터 읽는 위치. buf 는 읽기만 한다 */
 struct reader {
@@ -35,6 +40,9 @@ static bool next_inline_token(const struct byte_span *line, size_t *pos,
                               struct byte_span *out_token);
 static bool is_inline_space(char c);
 static enum resp_parse_result add_arg(struct resp_command *cmd, const struct byte_span *span);
+static enum buffer_result write_line(struct buffer *out_buf, char type, const char *text);
+static enum buffer_result write_parts(struct buffer *out_buf, const struct byte_span *parts,
+                                      size_t part_count);
 
 /* 상태를 들고 다니지 않고 매번 처음부터 다시 읽는다. 첫 번째 훑기는 할당 없이 검사만 해서,
  * 덜 온 명령 때문에 할당했다 버리는 일이 없다. 명령이 다 왔을 때만 두 번째 훑기로 인자를 만든다 */
@@ -71,6 +79,43 @@ void resp_command_deinit(struct resp_command *cmd)
     }
     mem_free(cmd->argv);
     *cmd = (struct resp_command){0};
+}
+
+enum buffer_result resp_write_simple(struct buffer *out_buf, const char *text)
+{
+    return write_line(out_buf, '+', text);
+}
+
+enum buffer_result resp_write_error(struct buffer *out_buf, const char *text)
+{
+    return write_line(out_buf, '-', text);
+}
+
+enum buffer_result resp_write_integer(struct buffer *out_buf, int64_t value)
+{
+    char line[HEADER_BUF_BYTES];
+    int len = snprintf(line, sizeof(line), ":%" PRId64 "\r\n", value);
+    const struct byte_span part = {.data = line, .len = (size_t)len};
+    return write_parts(out_buf, &part, 1);
+}
+
+enum buffer_result resp_write_bulk(struct buffer *out_buf, const struct str *value)
+{
+    char header[HEADER_BUF_BYTES];
+    int header_len = snprintf(header, sizeof(header), "$%zu\r\n", value->len);
+    const struct byte_span parts[] = {
+        {.data = header, .len = (size_t)header_len},
+        {.data = value->data, .len = value->len},
+        {.data = CRLF, .len = sizeof(CRLF) - 1},
+    };
+    return write_parts(out_buf, parts, sizeof(parts) / sizeof(parts[0]));
+}
+
+enum buffer_result resp_write_null(struct buffer *out_buf)
+{
+    static const char null_bulk[] = "$-1\r\n";
+    const struct byte_span part = {.data = null_bulk, .len = sizeof(null_bulk) - 1};
+    return write_parts(out_buf, &part, 1);
 }
 
 /* 명령 사이의 빈 줄과 공백은 건너뛴다 (telnet 에서 Enter 만 친 경우, Redis 와 동일).
@@ -286,4 +331,28 @@ static enum resp_parse_result add_arg(struct resp_command *cmd, const struct byt
     }
     cmd->argv[cmd->argc++] = arg;
     return RESP_PARSE_DONE;
+}
+
+static enum buffer_result write_line(struct buffer *out_buf, char type, const char *text)
+{
+    const struct byte_span parts[] = {
+        {.data = &type, .len = 1},
+        {.data = text, .len = strlen(text)},
+        {.data = CRLF, .len = sizeof(CRLF) - 1},
+    };
+    return write_parts(out_buf, parts, sizeof(parts) / sizeof(parts[0]));
+}
+
+/* 조각 중 하나라도 붙이지 못하면 이번에 붙인 만큼 len 을 되돌려 응답이 반쯤 남지 않게 한다 */
+static enum buffer_result write_parts(struct buffer *out_buf, const struct byte_span *parts,
+                                      size_t part_count)
+{
+    size_t start_len = out_buf->len;
+    for (size_t i = 0; i < part_count; i++) {
+        if (buffer_append(out_buf, parts[i].data, parts[i].len) != BUFFER_OK) {
+            out_buf->len = start_len;
+            return BUFFER_OUT_OF_MEMORY;
+        }
+    }
+    return BUFFER_OK;
 }

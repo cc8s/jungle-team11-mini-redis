@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "clock.h"
+#include "db.h"
 #include "mem.h"
 #include "server.h"
 #include "test.h"
@@ -24,11 +25,20 @@ enum {
     IDLE_TIMEOUT_MS = 50,
     IDLE_WAIT_MS = 400,
     CLIENT_COUNT = 3,
+    FAKE_NOW_MS = 1000,
+    TTL_MS = 1000,
+    TTL_KEY_COUNT = 1000,
+    REHASH_KEY_LIMIT = 10000,
+    CRON_FLUSH_KEY_COUNT = 200000,
+    MAX_CRON_CALLS = 100000,
+    CRON_MAX_CALL_MS = 50,
+    KEY_BUF_BYTES = 32,
 };
 
 static const char SET_KV[] = "*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n";
 static const char GET_K[] = "*2\r\n$3\r\nGET\r\n$1\r\nk\r\n";
 static const char DEL_K[] = "*2\r\n$3\r\nDEL\r\n$1\r\nk\r\n";
+static const char FLUSHALL[] = "*1\r\n$8\r\nFLUSHALL\r\n";
 
 static struct server *start_server(struct server_config *cfg)
 {
@@ -314,6 +324,106 @@ static void test_destroy_with_open_clients_returns_used_bytes(void)
     close(first_fd);
 }
 
+/* ---- 주기 작업 (server_cron) ---- */
+
+/* expire_at_ms 가 0 이면 TTL 없이 넣는다 */
+static void set_numbered_key(struct db *db, int number, int64_t expire_at_ms)
+{
+    char buf[KEY_BUF_BYTES];
+    int len = snprintf(buf, sizeof(buf), "key:%d", number);
+    struct db_set_request req = {
+        .key = str_create(buf, (size_t)len),
+        .value = str_create("v", 1),
+        .now_ms = FAKE_NOW_MS,
+    };
+    CHECK(db_set(db, &req) == DB_OK);
+    if (expire_at_ms > 0) {
+        struct str *lookup = str_create(buf, (size_t)len);
+        CHECK(db_set_expire(db, lookup, expire_at_ms) == DB_OK);
+        str_destroy(lookup);
+    }
+}
+
+static void test_cron_removes_expired_keys_without_access(void)
+{
+    struct server *server = start_default_server();
+    struct db *db = server_db(server);
+    for (int i = 0; i < TTL_KEY_COUNT; i++) {
+        set_numbered_key(db, i, FAKE_NOW_MS + TTL_MS);
+    }
+    server_cron(server, FAKE_NOW_MS);
+    CHECK(db_count(db) == TTL_KEY_COUNT); /* 아직 만료 전 */
+
+    for (int i = 0; i < MAX_CRON_CALLS && db_count(db) > 0; i++) {
+        server_cron(server, FAKE_NOW_MS + TTL_MS);
+    }
+    CHECK(db_count(db) == 0);
+    CHECK(db_ttl_count(db) == 0);
+    server_destroy(server);
+}
+
+static void test_cron_finishes_rehash_without_access(void)
+{
+    struct server *server = start_default_server();
+    struct db *db = server_db(server);
+    for (int i = 0; i < REHASH_KEY_LIMIT && !db_is_rehashing(db); i++) {
+        set_numbered_key(db, i, 0);
+    }
+    CHECK(db_is_rehashing(db));
+    for (int i = 0; i < MAX_CRON_CALLS && db_is_rehashing(db); i++) {
+        server_cron(server, FAKE_NOW_MS);
+    }
+    CHECK(!db_is_rehashing(db));
+    server_destroy(server);
+}
+
+/* 대량 FLUSHALL 뒤의 해제는 여러 번의 cron 에 나눠지고, 한 번은 짧게 끝나야 한다 */
+static void test_cron_frees_flushed_keys_in_short_steps(void)
+{
+    size_t baseline_bytes = mem_used_bytes();
+    struct server *server = start_default_server();
+    struct db *db = server_db(server);
+    for (int i = 0; i < CRON_FLUSH_KEY_COUNT; i++) {
+        set_numbered_key(db, i, 0);
+    }
+    CHECK(db_flush(db) == DB_OK);
+
+    int call_count = 0;
+    int64_t slowest_ms = 0;
+    while (call_count < MAX_CRON_CALLS && db_has_pending_free(db)) {
+        int64_t start_ms = clock_now_ms();
+        server_cron(server, FAKE_NOW_MS);
+        int64_t spent_ms = clock_now_ms() - start_ms;
+        if (spent_ms > slowest_ms) {
+            slowest_ms = spent_ms;
+        }
+        call_count++;
+    }
+    printf("  cron %d 번, 가장 긴 한 번 %lld ms\n", call_count, (long long)slowest_ms);
+    CHECK(!db_has_pending_free(db));
+    CHECK(call_count > 1);
+    CHECK(slowest_ms <= CRON_MAX_CALL_MS);
+    server_destroy(server);
+    CHECK(mem_used_bytes() == baseline_bytes);
+}
+
+static void test_flushall_then_get_replies_while_freeing(void)
+{
+    struct server_config cfg;
+    server_config_init_default(&cfg);
+    cfg.is_flush_enabled = true;
+    struct server *server = start_server(&cfg);
+    for (int i = 0; i < CRON_FLUSH_KEY_COUNT; i++) {
+        set_numbered_key(server_db(server), i, 0);
+    }
+    int fd = connect_client(server);
+    CHECK(exchange(server, fd, FLUSHALL, "+OK\r\n"));
+    CHECK(exchange(server, fd, GET_K, "$-1\r\n"));
+    CHECK(db_count(server_db(server)) == 0);
+    close(fd);
+    server_destroy(server);
+}
+
 int main(void)
 {
     RUN(test_set_get_del_roundtrip);
@@ -327,6 +437,10 @@ int main(void)
     RUN(test_client_reset_keeps_server_running);
     RUN(test_restart_on_same_port_binds);
     RUN(test_destroy_with_open_clients_returns_used_bytes);
+    RUN(test_cron_removes_expired_keys_without_access);
+    RUN(test_cron_finishes_rehash_without_access);
+    RUN(test_cron_frees_flushed_keys_in_short_steps);
+    RUN(test_flushall_then_get_replies_while_freeing);
     TEST_DONE();
     return 0;
 }

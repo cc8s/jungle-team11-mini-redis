@@ -10,6 +10,8 @@ enum {
     SERVER_MAX_CLIENTS = 10000,
     SERVER_LISTEN_BACKLOG = 511,
     SERVER_CRON_INTERVAL_MS = 100,
+    SERVER_CRON_TASK_BUDGET_MS = 1,
+    SERVER_MMAP_THRESHOLD_BYTES = 128 * 1024,
 };
 
 enum server_result {
@@ -46,6 +48,13 @@ enum server_result server_run_once(struct server *server, int max_wait_ms);
 
 /* 실제로 열린 포트를 반환한다 (설정 포트가 0 이었을 때 확인용). */
 int server_port(const struct server *server);
+
+/* 주기 작업을 한 번 한다: 만료 샘플링 → rehash → 지연 해제 → 유휴 연결 정리.
+ * 앞의 셋은 SERVER_CRON_TASK_BUDGET_MS 씩만 쓴다. 테스트는 가짜 시각을 넘긴다. */
+void server_cron(struct server *server, int64_t now_ms);
+
+/* 서버의 저장소. 테스트에서 소켓을 거치지 않고 키를 넣고 상태를 확인할 때 쓴다. */
+struct db *server_db(struct server *server);
 
 /* 지금 열린 클라이언트 연결 수를 반환한다. */
 size_t server_client_count(const struct server *server);

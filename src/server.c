@@ -11,11 +11,16 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
+
 #include "client_conn.h"
 #include "clock.h"
 #include "command.h"
 #include "db.h"
 #include "event_loop.h"
+#include "expire.h"
 #include "mem.h"
 
 static const char DEFAULT_BIND_ADDRESS[] = "127.0.0.1";
@@ -44,6 +49,7 @@ static bool update_client_events(struct server *server, struct client_conn *conn
 static void close_client(struct server *server, struct client_conn *conn);
 static void handle_cron(struct event_loop *loop, void *ctx);
 static void close_idle_clients(struct server *server, int64_t now_ms);
+static void fix_mmap_threshold(void);
 
 void server_config_init_default(struct server_config *cfg)
 {
@@ -65,6 +71,7 @@ struct server *server_create(const struct server_config *cfg)
     }
     server->cfg = *cfg;
     signal(SIGPIPE, SIG_IGN);
+    fix_mmap_threshold();
     server->loop = event_loop_create();
     server->db = db_create();
     server->listen_fd = open_listen_socket(cfg);
@@ -124,6 +131,21 @@ int server_port(const struct server *server)
         return -1;
     }
     return ntohs(addr.sin_port);
+}
+
+/* 루프를 오래 막지 않도록 일마다 예산을 따로 둔다. 만료를 먼저 해서 지운 만큼 rehash 할 양이
+ * 줄고, 유휴 정리는 연결 수에 비례하는 가벼운 일이라 예산 없이 마지막에 한다 */
+void server_cron(struct server *server, int64_t now_ms)
+{
+    expire_cycle(server->db, now_ms, SERVER_CRON_TASK_BUDGET_MS);
+    db_rehash_for_ms(server->db, SERVER_CRON_TASK_BUDGET_MS);
+    db_free_pending_for_ms(server->db, SERVER_CRON_TASK_BUDGET_MS);
+    close_idle_clients(server, now_ms);
+}
+
+struct db *server_db(struct server *server)
+{
+    return server->db;
 }
 
 size_t server_client_count(const struct server *server)
@@ -295,12 +317,10 @@ static void close_client(struct server *server, struct client_conn *conn)
     server->conn_count--;
 }
 
-/* 12단계에서 만료 · rehash · 지연 해제가 더해진다 */
 static void handle_cron(struct event_loop *loop, void *ctx)
 {
     (void)loop;
-    struct server *server = ctx;
-    close_idle_clients(server, clock_now_ms());
+    server_cron(ctx, clock_now_ms());
 }
 
 static void close_idle_clients(struct server *server, int64_t now_ms)
@@ -316,4 +336,14 @@ static void close_idle_clients(struct server *server, int64_t now_ms)
         }
         conn = next;
     }
+}
+
+/* glibc 는 큰 블록을 해제할 때마다 mmap 임계값을 그 크기로 올린다. 그러면 큰 버킷 배열도 힙에
+ * 잡히고, 대량 FLUSHALL 의 마지막 해제에서 힙 꼭대기 수십 MB 를 한 번에 OS 에 돌려주느라
+ * cron 한 번이 수십 ms 멈춘다. 임계값을 고정해 큰 블록은 항상 mmap 으로 따로 받고 돌려준다 */
+static void fix_mmap_threshold(void)
+{
+#ifdef __GLIBC__
+    mallopt(M_MMAP_THRESHOLD, SERVER_MMAP_THRESHOLD_BYTES);
+#endif
 }

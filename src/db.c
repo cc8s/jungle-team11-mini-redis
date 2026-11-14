@@ -181,6 +181,11 @@ void db_rehash_for_ms(struct db *db, int64_t budget_ms)
     hash_table_rehash_for_ms(db->expires, budget_ms);
 }
 
+bool db_is_rehashing(const struct db *db)
+{
+    return hash_table_is_rehashing(db->keys) || hash_table_is_rehashing(db->expires);
+}
+
 /* 이전 두 테이블을 대기 목록으로 옮기기만 해서 키 수와 상관없이 바로 끝난다.
  * 필요한 것을 모두 할당한 뒤에 바꾸므로 실패하면 db 는 그대로다 */
 enum db_result db_flush(struct db *db)

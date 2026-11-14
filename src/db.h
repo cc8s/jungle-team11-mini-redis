@@ -80,6 +80,9 @@ enum db_result db_evict_until_under(struct db *db, size_t max_bytes, int64_t now
 /* 두 테이블의 rehash 를 각각 budget_ms 동안 진행한다. 주기 작업에서 부른다. */
 void db_rehash_for_ms(struct db *db, int64_t budget_ms);
 
+/* keys · expires 중 하나라도 rehash 중이면 true */
+bool db_is_rehashing(const struct db *db);
+
 /* 저장된 키 수를 반환한다. 만료됐지만 아직 지우지 않은 키도 센다. */
 size_t db_count(const struct db *db);
 

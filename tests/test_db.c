@@ -309,17 +309,22 @@ static void test_delete_if_expired_with_random_ttl_key_deletes_both(void)
 }
 
 /* key:0 ~ key:(count-1) 를 TTL 없이 저장한다 */
+static void set_numbered_key(struct db *db, int number)
+{
+    char buf[KEY_BUF_BYTES];
+    int len = snprintf(buf, sizeof(buf), "key:%d", number);
+    struct db_set_request req = {
+        .key = str_create(buf, (size_t)len),
+        .value = str_create("v", 1),
+        .now_ms = NOW_MS,
+    };
+    CHECK(db_set(db, &req) == DB_OK);
+}
+
 static void set_numbered_keys(struct db *db, int count)
 {
     for (int i = 0; i < count; i++) {
-        char buf[KEY_BUF_BYTES];
-        int len = snprintf(buf, sizeof(buf), "key:%d", i);
-        struct db_set_request req = {
-            .key = str_create(buf, (size_t)len),
-            .value = str_create("v", 1),
-            .now_ms = NOW_MS,
-        };
-        CHECK(db_set(db, &req) == DB_OK);
+        set_numbered_key(db, i);
     }
 }
 
@@ -328,6 +333,19 @@ static void free_all_pending(struct db *db)
     while (db_has_pending_free(db)) {
         db_free_pending_for_ms(db, BIG_BUDGET_MS);
     }
+}
+
+/* 리사이즈가 시작될 때까지 넣은 뒤, 접근 없이 rehash 만 돌려도 끝나야 한다 */
+static void test_rehash_for_ms_finishes_rehashing(void)
+{
+    struct db *db = db_create();
+    for (int i = 0; i < PENDING_KEY_COUNT && !db_is_rehashing(db); i++) {
+        set_numbered_key(db, i);
+    }
+    CHECK(db_is_rehashing(db));
+    db_rehash_for_ms(db, BIG_BUDGET_MS);
+    CHECK(!db_is_rehashing(db));
+    db_destroy(db);
 }
 
 static void test_flush_many_keys_empties_db(void)
@@ -682,6 +700,7 @@ static void run_active_expire_support_tests(void)
 
 static void run_flush_tests(void)
 {
+    RUN(test_rehash_for_ms_finishes_rehashing);
     RUN(test_flush_many_keys_empties_db);
     RUN(test_flush_then_set_same_key_ignores_old_ttl);
     RUN(test_set_after_flush_stores_new_key);

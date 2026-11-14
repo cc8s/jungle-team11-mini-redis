@@ -15,7 +15,7 @@ LIB_SRCS := $(filter-out src/main.c, $(SRCS))
 LIB_OBJS := $(patsubst src/%.c, $(BUILD)/%.o, $(LIB_SRCS))
 TESTS    := $(patsubst tests/%.c, $(TBIN)/%, $(wildcard tests/test_*.c))
 
-.PHONY: all test itest difftest asan run clean
+.PHONY: all test itest difftest demotest bench asan run clean
 
 all: $(BIN)
 
@@ -43,6 +43,13 @@ itest: $(BIN)
 REDIS_SERVER ?= redis-server
 difftest: $(BIN)
 	python3 tests/integration/test_diff.py ./$(BIN) $(REDIS_SERVER)
+
+# 데모 API 기능 테스트(redis-py 필요)와 캐시 유무 성능 비교
+demotest: $(BIN)
+	python3 demo/test_demo.py ./$(BIN)
+
+bench: $(BIN)
+	python3 bench/bench.py ./$(BIN)
 
 asan:
 	$(MAKE) test BUILD=build/asan TBIN=tests/bin/asan EXTRA_CFLAGS="$(SAN)" EXTRA_LDFLAGS="$(SAN)"

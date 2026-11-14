@@ -2,7 +2,7 @@
 # 인수 테스트: 실제 mini-redis 를 띄우고 redis-cli · 원시 소켓 · redis-py 로 확인한다.
 # 사용법: make e2e  (또는 bash tests/e2e.sh). 하나라도 실패하면 종료 코드 1.
 # 필요한 도구: bash, redis-cli, python3, timeout, cmp. redis-py 가 없으면 build/e2e-venv 에 설치한다.
-# 포트는 E2E_PORT (기본 16379) 와 그 다음 번호를 쓴다.
+# 포트는 E2E_PORT (기본 16379) 와 그 다음 번호를 쓴다. E2E_VALGRIND=1 이면 서버를 valgrind 로 띄운다.
 # RESP 요청의 $ 는 셸 변수가 아니라 글자 그대로 보내야 하므로 작은따옴표를 쓴다.
 # shellcheck disable=SC2016
 
@@ -15,51 +15,10 @@ NO_FLUSH_PORT=$((PORT + 1))
 VENV_DIR="$ROOT_DIR/build/e2e-venv"
 WORK_DIR="$(mktemp -d)"
 TTL_WAIT_SEC=1.5
-START_WAIT_TRIES=50
 
-PASS_COUNT=0
-FAIL_COUNT=0
-SERVER_PIDS=()
-
-cleanup() {
-    for pid in "${SERVER_PIDS[@]}"; do
-        kill "$pid" 2>/dev/null
-        wait "$pid" 2>/dev/null
-    done
-    rm -rf "$WORK_DIR"
-}
+# shellcheck source=lib.sh
+source "$ROOT_DIR/tests/lib.sh"
 trap cleanup EXIT
-
-pass() {
-    PASS_COUNT=$((PASS_COUNT + 1))
-    echo "  ok   $1"
-}
-
-fail() {
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-    echo "  FAIL $1"
-    shift
-    for line in "$@"; do
-        echo "       $line"
-    done
-}
-
-# 서버를 띄우고 응답할 때까지 기다린다. 환경변수는 "이름=값" 으로 넘긴다
-start_server() {
-    local port="$1"
-    shift
-    env "$@" MINI_REDIS_PORT="$port" "$BIN" >"$WORK_DIR/server_$port.log" 2>&1 &
-    SERVER_PIDS+=("$!")
-    for _ in $(seq "$START_WAIT_TRIES"); do
-        if redis-cli -p "$port" GET __ready__ >/dev/null 2>&1; then
-            return 0
-        fi
-        sleep 0.1
-    done
-    echo "서버가 포트 $port 에서 시작하지 않았습니다:"
-    cat "$WORK_DIR/server_$port.log"
-    exit 1
-}
 
 cli() {
     redis-cli -p "$PORT" "$@" 2>&1
@@ -268,29 +227,11 @@ EOF
 
 test_graceful_shutdown() {
     echo "종료"
-    local pid="${SERVER_PIDS[0]}"
-    kill -TERM "$pid"
-    wait "$pid"
-    local status=$?
-    SERVER_PIDS=("${SERVER_PIDS[@]:1}")
-    if [ "$status" -eq 0 ]; then
-        pass "SIGTERM 에 종료 코드 0"
-    else
-        fail "SIGTERM 에 종료 코드 0" "종료 코드 $status"
-    fi
+    stop_all_servers
 }
 
 main() {
-    for tool in redis-cli python3 timeout cmp; do
-        if ! command -v "$tool" >/dev/null; then
-            echo "e2e: $tool 이 필요합니다"
-            exit 1
-        fi
-    done
-    if [ ! -x "$BIN" ]; then
-        echo "e2e: $BIN 이 없습니다. make 를 먼저 실행하세요"
-        exit 1
-    fi
+    require_tools redis-cli python3 timeout cmp
     start_server "$PORT" MINI_REDIS_ENABLE_FLUSH=1
     start_server "$NO_FLUSH_PORT"
 
@@ -303,8 +244,7 @@ main() {
     test_redis_py
     test_graceful_shutdown
 
-    echo "e2e: 통과 $PASS_COUNT, 실패 $FAIL_COUNT"
-    [ "$FAIL_COUNT" -eq 0 ]
+    finish e2e
 }
 
 main

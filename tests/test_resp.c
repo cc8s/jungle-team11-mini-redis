@@ -22,13 +22,15 @@ static result parse(const char *p, size_t n)
 
 static int arg_is(const resp_cmd *c, int i, const char *s, size_t n)
 {
-    return i < c->argc && c->argvlen[i] == n && memcmp(c->argv[i], s, n) == 0 && c->argv[i][n] == '\0';
+    return i < c->argc && c->argvlen[i] == n && memcmp(c->argv[i], s, n) == 0 &&
+           c->argv[i][n] == '\0';
 }
 #define ARG_IS(c, i, s) arg_is((c), (i), (s), sizeof(s) - 1)
 
 static int err_has(const result *r, const char *needle)
 {
-    return r->st == RESP_ERR && r->err != NULL && strstr(r->err, needle) != NULL && strncmp(r->err, "ERR ", 4) == 0;
+    return r->st == RESP_ERR && r->err != NULL && strstr(r->err, needle) != NULL &&
+           strncmp(r->err, "ERR ", 4) == 0;
 }
 
 /* ---- 기본 ---- */
@@ -48,7 +50,8 @@ static void test_basic_set(void)
     CHECK(r.cmd.argc == 0);
 }
 
-/* TC-RESP-002 BVA: 완성된 명령의 모든 앞부분(0 ~ 길이-1 바이트)은 INCOMPLETE, 아무것도 소비하지 않음 */
+/* TC-RESP-002 BVA: 완성된 명령의 모든 앞부분(0 ~ 길이-1 바이트)은 INCOMPLETE, 아무것도 소비하지
+ * 않음 */
 static void test_every_prefix_incomplete(void)
 {
     static const char in[] = "*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$5\r\nhello\r\n";
@@ -79,11 +82,10 @@ static void test_q14_header_is_not_element(void)
 /* TC-RESP-004 ST: 파이프라이닝 — 명령 3개 + 반쪽 하나 */
 static void test_pipeline(void)
 {
-    static const char in[] =
-        "*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n"
-        "*2\r\n$3\r\nGET\r\n$1\r\na\r\n"
-        "PING\r\n"
-        "*2\r\n$3\r\nDEL";
+    static const char in[] = "*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n"
+                             "*2\r\n$3\r\nGET\r\n$1\r\na\r\n"
+                             "PING\r\n"
+                             "*2\r\n$3\r\nDEL";
     const char *p = in;
     size_t left = sizeof in - 1;
     const char *names[] = {"SET", "GET", "PING"};
@@ -137,7 +139,8 @@ static void test_empty_multibulk(void)
 
 /* ---- 한도와 형식 오류 (학습 노트 Q15) ---- */
 
-/* TC-RESP-008 BVA: 벌크 길이 512MB 는 기다리고, 1바이트 넘으면 ERR. 미리 잡지 않으니 512MB 선언만으로는 아무 일 없음 */
+/* TC-RESP-008 BVA: 벌크 길이 512MB 는 기다리고, 1바이트 넘으면 ERR. 미리 잡지 않으니 512MB
+ * 선언만으로는 아무 일 없음 */
 static void test_bulk_limit(void)
 {
     result r = PARSE_S("*2\r\n$3\r\nGET\r\n$536870912\r\nabc");
@@ -160,7 +163,8 @@ static void test_number_overflow(void)
 /* TC-RESP-010 EG: 잘못된 벌크 길이 */
 static void test_bad_bulk_length(void)
 {
-    const char *bad[] = {"*1\r\n$-5\r\n", "*1\r\n$-1\r\n", "*1\r\n$abc\r\n", "*1\r\n$\r\n", "*1\r\n$+5\r\n", "*1\r\n$5x\r\n", "*1\r\n$ 5\r\n"};
+    const char *bad[] = {"*1\r\n$-5\r\n", "*1\r\n$-1\r\n", "*1\r\n$abc\r\n", "*1\r\n$\r\n",
+                         "*1\r\n$+5\r\n", "*1\r\n$5x\r\n", "*1\r\n$ 5\r\n"};
     for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
         result r = parse(bad[i], strlen(bad[i]));
         CHECK(err_has(&r, "invalid bulk length"));
@@ -169,8 +173,9 @@ static void test_bad_bulk_length(void)
 }
 
 /* TC-RESP-011 BVA·EG: 배열 원소 수. 상한은 INT_MAX (진짜 Redis 7+ 와 같음).
- * 처음에는 1,048,576 을 "Redis 와 같은 값"으로 적었으나 옛 버전의 값이었다 — 차등 테스트(TC-DIFF-012)가 잡음.
- * 선언만으로는 메모리를 잡지 않으므로(2단계 파싱) 큰 원소 수도 기다리기만 한다. */
+ * 처음에는 1,048,576 을 "Redis 와 같은 값"으로 적었으나 옛 버전의 값이었다 — 차등
+ * 테스트(TC-DIFF-012)가 잡음. 선언만으로는 메모리를 잡지 않으므로(2단계 파싱) 큰 원소 수도
+ * 기다리기만 한다. */
 static void test_multibulk_limit(void)
 {
     result r = PARSE_S("*1048577\r\n$4\r\nPING\r\n");
@@ -254,16 +259,15 @@ static void test_inline(void)
 
 /* ---- 속성 기반: 무작위로 쪼개 보내도 결과가 같다 (Q11·Q12) ---- */
 
-/* TC-RESP-016 속성: 명령 5개(바이너리, 인라인, 빈 배열 포함)를 무작위 크기 조각으로 500가지 방식으로 나눠 넣어도
- * 매번 같은 순서로 같은 명령 5개가 나온다 */
+/* TC-RESP-016 속성: 명령 5개(바이너리, 인라인, 빈 배열 포함)를 무작위 크기 조각으로 500가지
+ * 방식으로 나눠 넣어도 매번 같은 순서로 같은 명령 5개가 나온다 */
 static void test_random_splits(void)
 {
-    static const char stream[] =
-        "*3\r\n$3\r\nSET\r\n$3\r\nk\0y\r\n$7\r\nab\r\ncde\r\n"
-        "PING\r\n"
-        "*0\r\n"
-        "*2\r\n$3\r\nGET\r\n$3\r\nk\0y\r\n"
-        "*1\r\n$0\r\n\r\n";
+    static const char stream[] = "*3\r\n$3\r\nSET\r\n$3\r\nk\0y\r\n$7\r\nab\r\ncde\r\n"
+                                 "PING\r\n"
+                                 "*0\r\n"
+                                 "*2\r\n$3\r\nGET\r\n$3\r\nk\0y\r\n"
+                                 "*1\r\n$0\r\n\r\n";
     const size_t total = sizeof stream - 1;
     const int want_argc[] = {3, 1, 0, 2, 1};
 
@@ -276,22 +280,26 @@ static void test_random_splits(void)
         while (fed < total || in.len > 0) {
             if (fed < total) {
                 size_t chunk = 1 + (size_t)rand() % 9;
-                if (chunk > total - fed)
+                if (chunk > total - fed) {
                     chunk = total - fed;
+                }
                 CHECK(buf_append(&in, stream + fed, chunk) == 0);
                 fed += chunk;
             }
             for (;;) {
                 result r = parse(in.data, in.len);
-                if (r.st == RESP_INCOMPLETE)
+                if (r.st == RESP_INCOMPLETE) {
                     break;
+                }
                 CHECK(r.st == RESP_OK);
                 CHECK(got < 5);
                 CHECK(r.cmd.argc == want_argc[got]);
-                if (got == 0)
+                if (got == 0) {
                     CHECK(arg_is(&r.cmd, 2, "ab\r\ncde", 7));
-                if (got == 3)
+                }
+                if (got == 3) {
                     CHECK(arg_is(&r.cmd, 1, "k\0y", 3));
+                }
                 got++;
                 buf_consume(&in, r.consumed);
                 resp_cmd_free(&r.cmd);
@@ -321,8 +329,8 @@ static void test_writers(void)
     CHECK(resp_null(&o) == 0);
     CHECK(resp_array_len(&o, 0) == 0);
     CHECK(resp_array_len(&o, 2) == 0);
-    static const char want[] =
-        "+OK\r\n-ERR unknown command 'foo'\r\n:0\r\n:-2\r\n$3\r\na\0b\r\n$0\r\n\r\n$-1\r\n*0\r\n*2\r\n";
+    static const char want[] = "+OK\r\n-ERR unknown command "
+                               "'foo'\r\n:0\r\n:-2\r\n$3\r\na\0b\r\n$0\r\n\r\n$-1\r\n*0\r\n*2\r\n";
     CHECK(o.len == sizeof want - 1);
     CHECK(memcmp(o.data, want, o.len) == 0);
     buf_free(&o);

@@ -9,7 +9,8 @@
  *  - 키와 값은 바이너리 안전(\0 포함 가능)이다. 길이를 따로 받는다.
  *  - dict 는 키와 값을 복사해서 가진다. 호출자 버퍼를 나중에 바꿔도 영향이 없다.
  *  - 처음 버킷 수는 DICT_INITIAL_SIZE 이고, 버킷 수는 항상 2의 거듭제곱이다.
- *  - dict_set / dict_get / dict_del 은 호출 시점에 rehash 중이면 먼저 dict_rehash_step(d, 1) 을 한다.
+ *  - dict_set / dict_get / dict_del 은 호출 시점에 rehash 중이면 먼저 dict_rehash_step(d, 1) 을
+ * 한다.
  *  - dict_set 으로 새 키를 넣을 때, rehash 중이 아니고 ht[0].used >= ht[0].size 이면
  *    크기 2배의 ht[1] 을 만들고 rehashidx = 0 으로 rehash 를 시작한다(이 호출에서는 옮기지 않는다).
  *  - rehash 중에 들어오는 새 키는 항상 ht[1] 에 넣는다.
@@ -68,13 +69,15 @@ size_t dict_len(const dict *d);
 void dict_rehash_step(dict *d, int n);
 
 /* 무작위 엔트리 하나 (active 만료 샘플링용). 비어 있으면 NULL.
- * 키가 있는 버킷을 무작위로 고른 뒤 그 체인에서 무작위로 고른다. 체인 길이가 다르면 완전히 고르지는 않다(Redis 와 같음).
- * rehash 를 진행시키지 않는다. 난수는 dict_set_rand 로 바꿔 끼울 수 있다(NULL 이면 rand). */
+ * 키가 있는 버킷을 무작위로 고른 뒤 그 체인에서 무작위로 고른다. 체인 길이가 다르면 완전히 고르지는
+ * 않다(Redis 와 같음). rehash 를 진행시키지 않는다. 난수는 dict_set_rand 로 바꿔 끼울 수 있다(NULL
+ * 이면 rand). */
 entry *dict_random_entry(dict *d);
 void dict_set_rand(int (*rand_fn)(void));
 
 /* 순회 (KEYS 용). 모든 키를 정확히 한 번씩 돌려준다. rehash 도중이면 ht[0] 다음 ht[1].
- * 순회 중에는 dict_set / dict_get / dict_del 을 부르지 않는다(rehash 가 진행되어 엔트리가 옮겨진다). */
+ * 순회 중에는 dict_set / dict_get / dict_del 을 부르지 않는다(rehash 가 진행되어 엔트리가
+ * 옮겨진다). */
 typedef struct {
     dict *d;
     int table;

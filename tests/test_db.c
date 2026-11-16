@@ -174,7 +174,8 @@ static void test_del_expired_returns_zero(void)
     db_free(d);
 }
 
-/* TC-DB-011 EG: key_expired 는 판정만 하고 지우지 않으며, main 의 rehash 를 진행시키지 않는다 (KEYS 순회용) */
+/* TC-DB-011 EG: key_expired 는 판정만 하고 지우지 않으며, main 의 rehash 를 진행시키지 않는다 (KEYS
+ * 순회용) */
 static void test_key_expired_no_side_effect(void)
 {
     db *d = fresh();
@@ -193,8 +194,8 @@ static void test_key_expired_no_side_effect(void)
     CHECK(db_key_expired(d, K("k0")) == 0);   /* 미래 TTL */
     CHECK(db_key_expired(d, K("dead")) == 1); /* 지남 */
     CHECK(db_key_expired(d, K("none")) == 0);
-    CHECK(d->main->rehashidx == idx);         /* main 을 건드리지 않음 */
-    CHECK(db_size(d) == 6);                   /* 지우지 않음 */
+    CHECK(d->main->rehashidx == idx); /* main 을 건드리지 않음 */
+    CHECK(db_size(d) == 6);           /* 지우지 않음 */
     db_free(d);
 }
 

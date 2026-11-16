@@ -29,8 +29,9 @@ static int val_is(const entry *e, const char *v)
 static uint64_t num_hash(const char *key, size_t keylen)
 {
     uint64_t h = 0;
-    for (size_t i = 0; i < keylen; i++)
+    for (size_t i = 0; i < keylen; i++) {
         h = h * 10 + (uint64_t)(key[i] - '0');
+    }
     return h;
 }
 
@@ -194,10 +195,10 @@ static void test_expand_boundary(void)
 
     CHECK(set_s(d, "4", "v4") == 1);
     CHECK(dict_is_rehashing(d));
-    CHECK(d->rehashidx == 0);    /* 시작한 호출에서는 옮기지 않는다 */
+    CHECK(d->rehashidx == 0); /* 시작한 호출에서는 옮기지 않는다 */
     CHECK(d->ht[1].size == 8);
     CHECK(d->ht[0].used == 4);
-    CHECK(d->ht[1].used == 1);   /* 새 키는 ht[1] 로 */
+    CHECK(d->ht[1].used == 1); /* 새 키는 ht[1] 로 */
     CHECK(dict_len(d) == 5);
     dict_free(d);
 }
@@ -208,8 +209,8 @@ static void test_expand_boundary(void)
 static void test_new_key_during_rehash_not_lost(void)
 {
     dict *d = full_four();
-    set_s(d, "4", "v4");          /* rehash 시작, rehashidx 0 */
-    dict_rehash_step(d, 2);       /* 버킷 0, 1 옮김 */
+    set_s(d, "4", "v4");    /* rehash 시작, rehashidx 0 */
+    dict_rehash_step(d, 2); /* 버킷 0, 1 옮김 */
     CHECK(d->rehashidx == 2);
     CHECK(d->ht[0].used == 2);
     CHECK(d->ht[1].used == 3);
@@ -252,12 +253,12 @@ static void test_overwrite_during_rehash(void)
 static void test_get_del_both_tables(void)
 {
     dict *d = full_four();
-    set_s(d, "4", "v4");                 /* rehashidx 0, "4" 는 ht[1] */
-    CHECK(val_is(get_s(d, "3"), "v3"));  /* 옮김 → 1. "3" 은 ht[0] 에서 찾음 */
-    CHECK(val_is(get_s(d, "4"), "v4"));  /* 옮김 → 2. "4" 는 ht[1] 에서 찾음 */
+    set_s(d, "4", "v4");                /* rehashidx 0, "4" 는 ht[1] */
+    CHECK(val_is(get_s(d, "3"), "v3")); /* 옮김 → 1. "3" 은 ht[0] 에서 찾음 */
+    CHECK(val_is(get_s(d, "4"), "v4")); /* 옮김 → 2. "4" 는 ht[1] 에서 찾음 */
     CHECK(d->rehashidx == 2);
-    CHECK(del_s(d, "3") == 1);           /* 옮김 → 3. ht[0] 에서 삭제 */
-    CHECK(del_s(d, "4") == 1);           /* 옮기면서 rehash 끝, 그 뒤 삭제 */
+    CHECK(del_s(d, "3") == 1); /* 옮김 → 3. ht[0] 에서 삭제 */
+    CHECK(del_s(d, "4") == 1); /* 옮기면서 rehash 끝, 그 뒤 삭제 */
     CHECK(!dict_is_rehashing(d));
     CHECK(dict_len(d) == 3);
     CHECK(get_s(d, "3") == NULL);
@@ -291,12 +292,12 @@ static void test_each_op_advances_rehash(void)
     CHECK(d->rehashidx == 0);
     get_s(d, "0");
     CHECK(d->rehashidx == 1);
-    get_s(d, "99");               /* 없는 키 조회도 진행시킨다 */
+    get_s(d, "99"); /* 없는 키 조회도 진행시킨다 */
     CHECK(d->rehashidx == 2);
-    del_s(d, "77");               /* 없는 키 삭제도 */
+    del_s(d, "77"); /* 없는 키 삭제도 */
     CHECK(d->rehashidx == 3);
     CHECK(d->ht[0].used == 1);
-    get_s(d, "3");                /* 마지막 키를 옮기면 끝 */
+    get_s(d, "3"); /* 마지막 키를 옮기면 끝 */
     CHECK(!dict_is_rehashing(d));
     CHECK(dict_len(d) == 5);
     dict_free(d);
@@ -376,10 +377,12 @@ static void test_random_covers_all(void)
         set_s(d, k, k);
     }
     int seen[10] = {0};
-    for (int i = 0; i < 2000; i++)
+    for (int i = 0; i < 2000; i++) {
         mark(seen, dict_random_entry(d));
-    for (int i = 0; i < 10; i++)
+    }
+    for (int i = 0; i < 10; i++) {
         CHECK(seen[i] > 0);
+    }
     dict_free(d);
 }
 
@@ -392,16 +395,20 @@ static void test_random_during_rehash(void)
     CHECK(d->rehashidx == 2);
 
     /* 순차 난수(seq_rand)는 쓰지 않는다. 한 번 뽑을 때 버킷·체인에 하나씩 쓰여 짝·홀이 갈리고,
-     * 버킷 위치가 10칸 주기라 홀수 위치 버킷("3", "1")은 영원히 안 뽑힌다(처음 이 테스트가 그렇게 실패함). */
+     * 버킷 위치가 10칸 주기라 홀수 위치 버킷("3", "1")은 영원히 안 뽑힌다(처음 이 테스트가 그렇게
+     * 실패함). */
     dict_set_rand(NULL);
     srand(2);
     int seen[10] = {0};
-    for (int i = 0; i < 2000; i++)
+    for (int i = 0; i < 2000; i++) {
         mark(seen, dict_random_entry(d));
-    for (int i = 0; i <= 4; i++)
+    }
+    for (int i = 0; i <= 4; i++) {
         CHECK(seen[i] > 0);
-    for (int i = 5; i < 10; i++)
+    }
+    for (int i = 5; i < 10; i++) {
         CHECK(seen[i] == 0);
+    }
     CHECK(d->rehashidx == 2); /* 진행시키지 않음 */
     CHECK(dict_len(d) == 5);
     dict_free(d);
@@ -417,8 +424,9 @@ static void test_random_within_chain(void)
     dict_set_rand(seq_rand);
     seq_next = 0;
     int seen[10] = {0};
-    for (int i = 0; i < 60; i++)
+    for (int i = 0; i < 60; i++) {
         mark(seen, dict_random_entry(d));
+    }
     CHECK(seen[1] > 0 && seen[2] > 0 && seen[3] > 0);
     dict_set_rand(NULL);
     dict_free(d);
@@ -450,8 +458,9 @@ static void test_iter_all_once(void)
         n++;
     }
     CHECK(n == 1000);
-    for (int i = 0; i < 1000; i++)
+    for (int i = 0; i < 1000; i++) {
         CHECK(seen[i] == 1);
+    }
     dict_free(d);
 }
 
@@ -464,10 +473,12 @@ static void test_iter_during_rehash(void)
     int seen[10] = {0};
     dict_iter it;
     dict_iter_init(&it, d);
-    for (entry *e = dict_iter_next(&it); e != NULL; e = dict_iter_next(&it))
+    for (entry *e = dict_iter_next(&it); e != NULL; e = dict_iter_next(&it)) {
         mark(seen, e);
-    for (int i = 0; i <= 4; i++)
+    }
+    for (int i = 0; i <= 4; i++) {
         CHECK(seen[i] == 1);
+    }
     CHECK(d->rehashidx == 1);
     dict_free(d);
 }

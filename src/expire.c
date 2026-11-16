@@ -36,34 +36,40 @@ int expire_active_cycle(db *d)
     int64_t start = mono_ms();
     for (;;) {
         size_t n = dict_len(d->expires);
-        if (n == 0)
+        if (n == 0) {
             break;
+        }
         int sample = n < ACTIVE_EXPIRE_SAMPLES ? (int)n : ACTIVE_EXPIRE_SAMPLES;
         int expired = 0;
         int64_t now = now_ms();
         for (int i = 0; i < sample; i++) {
             entry *x = dict_random_entry(d->expires);
-            if (x == NULL)
+            if (x == NULL) {
                 break;
+            }
             int64_t when;
             memcpy(&when, x->val, sizeof when);
-            if (now <= when)
+            if (now <= when) {
                 continue;
+            }
             /* db_del 이 이 엔트리를 해제하므로 키를 먼저 복사한다 */
             size_t kl = x->keylen;
             char *k = malloc(kl + 1);
-            if (k == NULL)
+            if (k == NULL) {
                 return deleted;
+            }
             memcpy(k, x->key, kl);
             db_del(d, k, kl);
             free(k);
             expired++;
         }
         deleted += expired;
-        if (expired * 100 <= sample * ACTIVE_EXPIRE_REPEAT_PCT)
+        if (expired * 100 <= sample * ACTIVE_EXPIRE_REPEAT_PCT) {
             break;
-        if (mono_ms() - start >= ACTIVE_EXPIRE_BUDGET_MS)
+        }
+        if (mono_ms() - start >= ACTIVE_EXPIRE_BUDGET_MS) {
             break;
+        }
     }
     return deleted;
 }

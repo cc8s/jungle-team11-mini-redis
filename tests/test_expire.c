@@ -9,7 +9,8 @@ static int64_t fake_clock(void)
     return fake_now;
 }
 
-/* 키 n개를 만들고, 앞의 expired 개는 이미 지난 TTL, 그다음 future 개는 미래 TTL, 나머지는 TTL 없음 */
+/* 키 n개를 만들고, 앞의 expired 개는 이미 지난 TTL, 그다음 future 개는 미래 TTL, 나머지는 TTL 없음
+ */
 static db *make(int n, int expired, int future)
 {
     expire_set_clock(fake_clock);
@@ -20,10 +21,11 @@ static db *make(int n, int expired, int future)
     for (int i = 0; i < n; i++) {
         snprintf(k, sizeof k, "key:%d", i);
         db_set(d, k, strlen(k), "v", 1);
-        if (i < expired)
+        if (i < expired) {
             db_set_expire(d, k, strlen(k), fake_now + 10);
-        else if (i < expired + future)
+        } else if (i < expired + future) {
             db_set_expire(d, k, strlen(k), fake_now + 1000000);
+        }
     }
     fake_now += 11; /* 앞의 expired 개가 만료됨. 아무도 조회하지 않음 */
     return d;
@@ -34,11 +36,13 @@ static void test_active_removes_unaccessed(void)
 {
     db *d = make(300, 100, 100);
     int total = 0, n;
-    while ((n = expire_active_cycle(d)) > 0)
+    while ((n = expire_active_cycle(d)) > 0) {
         total += n;
+    }
     /* 마지막 몇 개는 표본에 잘 안 걸려 남을 수 있다(25% 이하면 멈춤) → 여러 번 돌려 다 지운다 */
-    for (int i = 0; i < 200; i++)
+    for (int i = 0; i < 200; i++) {
         total += expire_active_cycle(d);
+    }
     CHECK(total == 100);
     CHECK(db_size(d) == 200);
     CHECK(dict_len(d->expires) == 100);

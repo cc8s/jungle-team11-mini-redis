@@ -32,6 +32,7 @@ typedef struct {
     size_t maxmemory;
     int policy;
     size_t evicted; /* 지금까지 내보낸 키 수 */
+    int active_rehash; /* 1(기본)이면 cron 이 rehash 를 서둘러 끝낸다. 0 이면 명령이 올 때만 한 칸씩 (DEBUG ACTIVEREHASH) */
 } db;
 
 db *db_create(size_t maxmemory, int policy);

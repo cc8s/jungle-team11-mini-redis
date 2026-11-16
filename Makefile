@@ -15,7 +15,7 @@ LIB_SRCS := $(filter-out src/main.c, $(SRCS))
 LIB_OBJS := $(patsubst src/%.c, $(BUILD)/%.o, $(LIB_SRCS))
 TESTS    := $(patsubst tests/%.c, $(TBIN)/%, $(wildcard tests/test_*.c))
 
-.PHONY: all test itest difftest demotest bench asan run clean
+.PHONY: all test itest difftest demotest bench inspector inspectortest asan run clean
 
 all: $(BIN)
 
@@ -50,6 +50,13 @@ demotest: $(BIN)
 
 bench: $(BIN)
 	python3 bench/bench.py ./$(BIN)
+
+# 웹 인스펙터: 브라우저에서 명령을 보내고 오간 바이트와 해시 테이블 내부를 본다. mini-redis 를 먼저 켠다(make run)
+inspector:
+	python3 inspector/server.py
+
+inspectortest: $(BIN)
+	python3 inspector/test_inspector.py ./$(BIN)
 
 asan:
 	$(MAKE) test BUILD=build/asan TBIN=tests/bin/asan EXTRA_CFLAGS="$(SAN)" EXTRA_LDFLAGS="$(SAN)"

@@ -22,6 +22,7 @@ db *db_create(size_t maxmemory, int policy)
     }
     d->maxmemory = maxmemory;
     d->policy = policy;
+    d->active_rehash = 1;
     return d;
 }
 

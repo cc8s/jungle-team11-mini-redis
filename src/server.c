@@ -185,7 +185,7 @@ static void cron(db *d)
 {
     expire_active_cycle(d);
     int64_t until = mono_ms() + 1;
-    while ((dict_is_rehashing(d->main) || dict_is_rehashing(d->expires)) && mono_ms() < until) {
+    while (d->active_rehash && (dict_is_rehashing(d->main) || dict_is_rehashing(d->expires)) && mono_ms() < until) {
         dict_rehash_step(d->main, 100);
         dict_rehash_step(d->expires, 100);
     }

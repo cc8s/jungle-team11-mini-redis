@@ -8,7 +8,7 @@ LIB_SRCS := $(filter-out src/main.c, $(SRCS))
 LIB_OBJS := $(patsubst src/%.c, build/%.o, $(LIB_SRCS))
 TESTS    := $(patsubst tests/%.c, tests/bin/%, $(wildcard tests/test_*.c))
 
-.PHONY: all test e2e valgrind stability run clean
+.PHONY: all test e2e valgrind stability bench run clean
 
 all: $(BIN)
 
@@ -41,6 +41,23 @@ valgrind: $(TESTS) $(BIN)
 # 비정상 클라이언트 · 동시 연결 · 작은 maxmemory (Linux 개발 컨테이너)
 stability: $(BIN)
 	bash tests/stability.sh
+
+# 벤치마크: 지연 측정 클라이언트와 rehash 를 한 번에 끝내는 비교용 서버를 만들고 시나리오를 돌린다
+BENCH_DIR := build/bench
+BENCH_BLOCKING_BIN := $(BENCH_DIR)/mini-redis-blocking-rehash
+BENCH_LATENCY_BIN := $(BENCH_DIR)/latency
+
+$(BENCH_DIR):
+	mkdir -p $@
+
+$(BENCH_BLOCKING_BIN): $(SRCS) $(wildcard src/*.h) | $(BENCH_DIR)
+	$(CC) $(CFLAGS) -DMINI_REDIS_BLOCKING_REHASH $(SRCS) -o $@ $(LDFLAGS)
+
+$(BENCH_LATENCY_BIN): bench/latency.c | $(BENCH_DIR)
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
+
+bench: $(BIN) $(BENCH_BLOCKING_BIN) $(BENCH_LATENCY_BIN)
+	bash bench/run.sh
 
 run: $(BIN)
 	./$(BIN)

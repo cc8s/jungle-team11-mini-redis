@@ -456,6 +456,12 @@ static void start_rehash(struct hash_table *ht, size_t new_bucket_count)
         return;
     }
     ht->rehash_idx = 0;
+#ifdef MINI_REDIS_BLOCKING_REHASH
+    /* 벤치마크 비교용 빌드(make bench)에서만: 점진적으로 나누지 않고 그 자리에서 모두 옮긴다 */
+    while (hash_table_is_rehashing(ht)) {
+        hash_table_rehash_step(ht, ht->tables[0].bucket_count);
+    }
+#endif
 }
 
 /* rehash_idx 를 비지 않은 버킷까지 옮긴다. 예산을 다 쓰면 false.

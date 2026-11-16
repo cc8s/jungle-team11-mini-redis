@@ -56,8 +56,9 @@ static void client_close(client *c)
 
 static void set_events(client *c, int want_out)
 {
-    if (c->want_out == want_out)
+    if (c->want_out == want_out) {
         return;
+}
     struct epoll_event ev = {.events = EPOLLIN | (want_out ? EPOLLOUT : 0), .data.fd = c->fd};
     epoll_ctl(epfd, EPOLL_CTL_MOD, c->fd, &ev);
     c->want_out = want_out;
@@ -101,8 +102,9 @@ static int client_process(client *c, db *d)
         size_t used;
         const char *err;
         resp_status st = resp_parse(c->in.data + off, c->in.len - off, &cmd, &used, &err);
-        if (st == RESP_INCOMPLETE)
+        if (st == RESP_INCOMPLETE) {
             break;
+}
         if (st == RESP_ERR) {
             resp_error(&c->out, err);
             c->closing = 1;
@@ -130,8 +132,9 @@ static void client_readable(client *c, db *d)
     do {
         n = read(c->fd, tmp, sizeof tmp);
     } while (n < 0 && errno == EINTR);
-    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
         return;
+}
     if (n <= 0) { /* 0 = 상대가 닫음, 그 외 오류 */
         client_close(c);
         return;
@@ -140,8 +143,9 @@ static void client_readable(client *c, db *d)
         client_close(c);
         return;
     }
-    if (client_process(c, d) != 0)
+    if (client_process(c, d) != 0) {
         return;
+}
     client_flush(c);
 }
 
@@ -150,8 +154,9 @@ static void accept_all(int lfd)
     for (;;) {
         int fd = accept4(lfd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
         if (fd < 0) {
-            if (errno == EINTR)
+            if (errno == EINTR) {
                 continue;
+}
             return; /* EAGAIN 또는 일시적 오류 */
         }
         if (fd >= SERVER_MAX_CLIENTS) {
@@ -194,8 +199,9 @@ static void cron(db *d)
 static int listen_on(int port)
 {
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-    if (fd < 0)
+    if (fd < 0) {
         return -1;
+}
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
     struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons((unsigned short)port),
@@ -233,8 +239,9 @@ int server_run(const server_config *cfg)
     while (!stop_flag) {
         int64_t wait = next_cron - mono_ms();
         int n = epoll_wait(epfd, events, 256, wait > 0 ? (int)wait : 0);
-        if (n < 0 && errno != EINTR)
+        if (n < 0 && errno != EINTR) {
             break;
+}
         for (int i = 0; i < n; i++) {
             int fd = events[i].data.fd;
             if (fd == lfd) {
@@ -242,16 +249,19 @@ int server_run(const server_config *cfg)
                 continue;
             }
             client *c = clients[fd];
-            if (c == NULL)
+            if (c == NULL) {
                 continue;
+}
             if (events[i].events & (EPOLLERR | EPOLLHUP)) {
                 client_close(c);
                 continue;
             }
-            if (events[i].events & EPOLLOUT && client_flush(c) != 0)
+            if (events[i].events & EPOLLOUT && client_flush(c) != 0) {
                 continue;
-            if (events[i].events & EPOLLIN)
+}
+            if (events[i].events & EPOLLIN) {
                 client_readable(c, d);
+}
         }
         if (mono_ms() >= next_cron) {
             cron(d);
@@ -259,9 +269,11 @@ int server_run(const server_config *cfg)
         }
     }
 
-    for (int fd = 0; fd < SERVER_MAX_CLIENTS; fd++)
-        if (clients[fd] != NULL)
+    for (int fd = 0; fd < SERVER_MAX_CLIENTS; fd++) {
+        if (clients[fd] != NULL) {
             client_close(clients[fd]);
+}
+}
     close(lfd);
     close(epfd);
     db_free(d);

@@ -16,16 +16,19 @@ static int parse_ll(const char *p, size_t n, long long *out)
         neg = 1;
         i = 1;
     }
-    if (i == n)
+    if (i == n) {
         return -1;
+}
     unsigned long long v = 0;
     const unsigned long long limit = neg ? (unsigned long long)LLONG_MAX + 1 : (unsigned long long)LLONG_MAX;
     for (; i < n; i++) {
-        if (p[i] < '0' || p[i] > '9')
+        if (p[i] < '0' || p[i] > '9') {
             return -1;
+}
         unsigned d = (unsigned)(p[i] - '0');
-        if (v > (limit - d) / 10)
+        if (v > (limit - d) / 10) {
             return -1;
+}
         v = v * 10 + d;
     }
     *out = neg ? (long long)(0 - v) : (long long)v;
@@ -35,9 +38,11 @@ static int parse_ll(const char *p, size_t n, long long *out)
 /* data[from..len) 에서 "\r\n" 의 위치. 없으면 -1 */
 static long find_crlf(const char *data, size_t from, size_t len)
 {
-    for (size_t i = from; i + 1 < len; i++)
-        if (data[i] == '\r' && data[i + 1] == '\n')
+    for (size_t i = from; i + 1 < len; i++) {
+        if (data[i] == '\r' && data[i + 1] == '\n') {
             return (long)i;
+}
+}
     return -1;
 }
 
@@ -48,8 +53,9 @@ static int cmd_alloc(resp_cmd *c, int argc)
     c->argc = 0;
     c->argv = NULL;
     c->argvlen = NULL;
-    if (argc == 0)
+    if (argc == 0) {
         return 0;
+}
     c->argv = calloc((size_t)argc, sizeof *c->argv);
     c->argvlen = calloc((size_t)argc, sizeof *c->argvlen);
     if (c->argv == NULL || c->argvlen == NULL) {
@@ -65,10 +71,12 @@ static int cmd_alloc(resp_cmd *c, int argc)
 static int cmd_push(resp_cmd *c, const char *p, size_t n)
 {
     char *s = malloc(n + 1);
-    if (s == NULL)
+    if (s == NULL) {
         return -1;
-    if (n > 0)
+}
+    if (n > 0) {
         memcpy(s, p, n);
+}
     s[n] = '\0';
     c->argv[c->argc] = s;
     c->argvlen[c->argc] = n;
@@ -78,8 +86,9 @@ static int cmd_push(resp_cmd *c, const char *p, size_t n)
 
 void resp_cmd_free(resp_cmd *c)
 {
-    for (int i = 0; i < c->argc; i++)
+    for (int i = 0; i < c->argc; i++) {
         free(c->argv[i]);
+}
     free(c->argv);
     free(c->argvlen);
     c->argc = 0;
@@ -105,27 +114,35 @@ static resp_status parse_inline(const char *data, size_t len, resp_cmd *out, siz
     /* 1차: 단어 수 세기 */
     int words = 0;
     for (size_t i = 0; i < line_end;) {
-        while (i < line_end && (data[i] == ' ' || data[i] == '\t'))
+        while (i < line_end && (data[i] == ' ' || data[i] == '\t')) {
             i++;
-        if (i == line_end)
+}
+        if (i == line_end) {
             break;
+}
         words++;
-        while (i < line_end && data[i] != ' ' && data[i] != '\t')
+        while (i < line_end && data[i] != ' ' && data[i] != '\t') {
             i++;
+}
     }
     /* 2차: 복사 */
-    if (cmd_alloc(out, words) != 0)
+    if (cmd_alloc(out, words) != 0) {
         goto oom;
+}
     for (size_t i = 0; i < line_end;) {
-        while (i < line_end && (data[i] == ' ' || data[i] == '\t'))
+        while (i < line_end && (data[i] == ' ' || data[i] == '\t')) {
             i++;
-        if (i == line_end)
+}
+        if (i == line_end) {
             break;
+}
         size_t start = i;
-        while (i < line_end && data[i] != ' ' && data[i] != '\t')
+        while (i < line_end && data[i] != ' ' && data[i] != '\t') {
             i++;
-        if (cmd_push(out, data + start, i - start) != 0)
+}
+        if (cmd_push(out, data + start, i - start) != 0) {
             goto oom;
+}
     }
     *consumed = end + 1;
     return RESP_OK;
@@ -167,8 +184,9 @@ static resp_status walk_multibulk(const char *data, size_t len, resp_cmd *out, s
     int bad_number = 0;
 
     resp_status st = read_header(data, len, 0, &count, &pos, &bad_number);
-    if (st == RESP_INCOMPLETE)
+    if (st == RESP_INCOMPLETE) {
         return st;
+}
     if (st == RESP_ERR) {
         *errmsg = bad_number ? "ERR Protocol error: invalid multibulk length"
                              : "ERR Protocol error: too big mbulk count string";
@@ -179,17 +197,20 @@ static resp_status walk_multibulk(const char *data, size_t len, resp_cmd *out, s
         return RESP_ERR;
     }
     if (count <= 0) { /* *0, *-1: 빈 명령 */
-        if (copy)
+        if (copy) {
             cmd_alloc(out, 0);
+}
         *consumed = pos;
         return RESP_OK;
     }
-    if (copy && cmd_alloc(out, (int)count) != 0)
+    if (copy && cmd_alloc(out, (int)count) != 0) {
         goto oom;
+}
 
     for (long long i = 0; i < count; i++) {
-        if (pos >= len)
+        if (pos >= len) {
             return RESP_INCOMPLETE;
+}
         if (data[pos] != '$') {
             snprintf(expected_msg, sizeof expected_msg, "ERR Protocol error: expected '$', got '%c'", data[pos]);
             *errmsg = expected_msg;
@@ -197,8 +218,9 @@ static resp_status walk_multibulk(const char *data, size_t len, resp_cmd *out, s
         }
         long long blen;
         st = read_header(data, len, pos, &blen, &pos, &bad_number);
-        if (st == RESP_INCOMPLETE)
+        if (st == RESP_INCOMPLETE) {
             return st;
+}
         if (st == RESP_ERR) {
             *errmsg = bad_number ? "ERR Protocol error: invalid bulk length"
                                  : "ERR Protocol error: too big bulk count string";
@@ -209,14 +231,16 @@ static resp_status walk_multibulk(const char *data, size_t len, resp_cmd *out, s
             return RESP_ERR;
         }
         size_t n = (size_t)blen;
-        if (len - pos < n + 2)
+        if (len - pos < n + 2) {
             return RESP_INCOMPLETE;
+}
         if (data[pos + n] != '\r' || data[pos + n + 1] != '\n') {
             *errmsg = "ERR Protocol error: expected CRLF after bulk data";
             return RESP_ERR;
         }
-        if (copy && cmd_push(out, data + pos, n) != 0)
+        if (copy && cmd_push(out, data + pos, n) != 0) {
             goto oom;
+}
         pos += n + 2;
     }
     *consumed = pos;
@@ -233,16 +257,19 @@ resp_status resp_parse(const char *data, size_t len, resp_cmd *out, size_t *cons
     out->argvlen = NULL;
     *consumed = 0;
     *errmsg = NULL;
-    if (len == 0)
+    if (len == 0) {
         return RESP_INCOMPLETE;
-    if (data[0] != '*')
+}
+    if (data[0] != '*') {
         return parse_inline(data, len, out, consumed, errmsg);
+}
 
     /* 1차: 할당 없이 끝까지 검사 → 완성됐을 때만 2차에서 복사 */
     size_t used = 0;
     resp_status st = walk_multibulk(data, len, out, &used, errmsg, 0);
-    if (st != RESP_OK)
+    if (st != RESP_OK) {
         return st;
+}
     st = walk_multibulk(data, len, out, &used, errmsg, 1);
     if (st != RESP_OK) {
         resp_cmd_free(out);
@@ -271,8 +298,9 @@ int resp_int(buf *o, long long n)
 
 int resp_bulk(buf *o, const char *p, size_t n)
 {
-    if (buf_appendf(o, "$%zu\r\n", n) != 0 || buf_append(o, p, n) != 0)
+    if (buf_appendf(o, "$%zu\r\n", n) != 0 || buf_append(o, p, n) != 0) {
         return -1;
+}
     return buf_append(o, "\r\n", 2);
 }
 

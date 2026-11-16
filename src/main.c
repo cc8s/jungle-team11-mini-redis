@@ -18,16 +18,21 @@ static long long parse_size(const char *s)
 {
     char *end;
     long long v = strtoll(s, &end, 10);
-    if (end == s || v < 0)
+    if (end == s || v < 0) {
         return -1;
-    if (*end == '\0' || strcasecmp(end, "b") == 0)
+}
+    if (*end == '\0' || strcasecmp(end, "b") == 0) {
         return v;
-    if (strcasecmp(end, "kb") == 0)
+}
+    if (strcasecmp(end, "kb") == 0) {
         return v * 1024;
-    if (strcasecmp(end, "mb") == 0)
+}
+    if (strcasecmp(end, "mb") == 0) {
         return v * 1024 * 1024;
-    if (strcasecmp(end, "gb") == 0)
+}
+    if (strcasecmp(end, "gb") == 0) {
         return v * 1024 * 1024 * 1024;
+}
     return -1;
 }
 
@@ -46,11 +51,11 @@ int main(int argc, char **argv)
             cfg.maxmemory = (size_t)v;
         } else if (strcmp(argv[i], "--maxmemory-policy") == 0 && i + 1 < argc) {
             const char *p = argv[++i];
-            if (strcmp(p, "noeviction") == 0)
+            if (strcmp(p, "noeviction") == 0) {
                 cfg.policy = DB_NOEVICTION;
-            else if (strcmp(p, "allkeys-random") == 0)
+            } else if (strcmp(p, "allkeys-random") == 0) {
                 cfg.policy = DB_ALLKEYS_RANDOM;
-            else {
+            } else {
                 usage();
                 return 2;
             }

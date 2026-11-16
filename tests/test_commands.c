@@ -33,8 +33,9 @@ static int run(const char *want, int argc, ...)
     last_write = cmd_execute(D, &c, &OUT);
     resp_cmd_free(&c);
     int ok = OUT.len == strlen(want) && memcmp(OUT.data, want, OUT.len) == 0;
-    if (!ok && want[0] != '\0') /* want 가 "" 이면 실행만 하고 응답은 호출자가 본다 */
+    if (!ok && want[0] != '\0') { /* want 가 "" 이면 실행만 하고 응답은 호출자가 본다 */
         fprintf(stderr, "  want: %s\n  got:  %.*s\n", want, (int)OUT.len, OUT.data ? OUT.data : "");
+}
     return ok;
 }
 
@@ -273,8 +274,9 @@ static void test_binary_roundtrip(void)
 static int out_is(const buf *want)
 {
     int ok = OUT.len == want->len && memcmp(OUT.data, want->data, OUT.len) == 0;
-    if (!ok)
+    if (!ok) {
         fprintf(stderr, "  want: %.*s\n  got:  %.*s\n", (int)want->len, want->data, (int)OUT.len, OUT.data);
+}
     return ok;
 }
 
@@ -290,13 +292,15 @@ static void test_debug_ht_shape(void)
         buf_appendf(&w, "*14\r\n$6\r\nnow_ms\r\n:1000000\r\n$11\r\nused_memory\r\n:%zu\r\n", db_entry_cost(1, 1));
         buf_appendf(&w, "$9\r\nmaxmemory\r\n:0\r\n$7\r\nevicted\r\n:0\r\n$13\r\nactive_rehash\r\n:1\r\n");
         buf_appendf(&w, "$9\r\nrehashidx\r\n:-1\r\n$6\r\ntables\r\n*2\r\n*3\r\n:4\r\n:1\r\n*%d\r\n", maxb);
-        for (size_t i = 0; i < (size_t)maxb; i++)
+        for (size_t i = 0; i < (size_t)maxb; i++) {
             buf_appendf(&w, i == slot ? "*1\r\n*2\r\n$1\r\na\r\n$1\r\n1\r\n" : "*0\r\n");
+}
         buf_appendf(&w, "*3\r\n:0\r\n:0\r\n*0\r\n");
-        if (maxb == 4)
+        if (maxb == 4) {
             EXEC(3, "DEBUG", "HT", "main");
-        else
+        } else {
             EXEC(4, "debug", "ht", "main", "2");
+}
         CHECK(out_is(&w));
         buf_free(&w);
     }
@@ -312,12 +316,14 @@ static void test_debug_readonly_and_step(void)
 {
     reset(0, DB_NOEVICTION);
     const char *k[] = {"k1", "k2", "k3", "k4", "k5"};
-    for (int i = 0; i < 5; i++)
+    for (int i = 0; i < 5; i++) {
         run("+OK\r\n", 3, "SET", k[i], "v");
+}
     CHECK(dict_is_rehashing(D->main)); /* 5번째 키에서 4 → 8 rehash 시작 */
     long idx = D->main->rehashidx;
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < 3; i++) {
         EXEC(3, "DEBUG", "HT", "main");
+}
     CHECK(D->main->rehashidx == idx);
 
     EXEC(4, "DEBUG", "REHASHSTEP", "main", "1"); /* 한 칸: 그 버킷에 키가 몰려 있었으면 바로 끝날 수도 있다 */

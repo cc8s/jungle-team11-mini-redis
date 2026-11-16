@@ -30,16 +30,19 @@ static int to_ll(const char *p, size_t n, long long *out)
         neg = 1;
         i = 1;
     }
-    if (i == n || n > 20)
+    if (i == n || n > 20) {
         return -1;
+}
     unsigned long long v = 0;
     const unsigned long long limit = neg ? (unsigned long long)LLONG_MAX + 1 : (unsigned long long)LLONG_MAX;
     for (; i < n; i++) {
-        if (p[i] < '0' || p[i] > '9')
+        if (p[i] < '0' || p[i] > '9') {
             return -1;
+}
         unsigned d = (unsigned)(p[i] - '0');
-        if (v > (limit - d) / 10)
+        if (v > (limit - d) / 10) {
             return -1;
+}
         v = v * 10 + d;
     }
     *out = neg ? (long long)(0 - v) : (long long)v;
@@ -61,12 +64,14 @@ static void err_expire(buf *out, const char *cmd)
 /* amount 를 unit(1 또는 1000)ms 단위로 보고 현재 시각에 더한 절대 시각. 넘치면 -1 */
 static int to_when(long long amount, long long unit, int64_t *when)
 {
-    if (amount > LLONG_MAX / unit || amount < LLONG_MIN / unit)
+    if (amount > LLONG_MAX / unit || amount < LLONG_MIN / unit) {
         return -1;
+}
     long long ms = amount * unit;
     int64_t now = now_ms();
-    if ((ms > 0 && now > LLONG_MAX - ms) || (ms < 0 && now < LLONG_MIN - ms))
+    if ((ms > 0 && now > LLONG_MAX - ms) || (ms < 0 && now < LLONG_MIN - ms)) {
         return -1;
+}
     *when = now + ms;
     return 0;
 }
@@ -76,10 +81,11 @@ static int to_when(long long amount, long long unit, int64_t *when)
 static int cmd_ping(db *d, resp_cmd *c, buf *out)
 {
     (void)d;
-    if (c->argc == 1)
+    if (c->argc == 1) {
         resp_simple(out, "PONG");
-    else
+    } else {
         resp_bulk(out, c->argv[1], c->argvlen[1]);
+}
     return 0;
 }
 
@@ -133,18 +139,20 @@ static int cmd_set(db *d, resp_cmd *c, buf *out)
 static int cmd_get(db *d, resp_cmd *c, buf *out)
 {
     entry *e = db_lookup(d, c->argv[1], c->argvlen[1]);
-    if (e == NULL)
+    if (e == NULL) {
         resp_null(out);
-    else
+    } else {
         resp_bulk(out, e->val, e->vallen);
+}
     return 0;
 }
 
 static int cmd_del(db *d, resp_cmd *c, buf *out)
 {
     long long n = 0;
-    for (int i = 1; i < c->argc; i++)
+    for (int i = 1; i < c->argc; i++) {
         n += db_del(d, c->argv[i], c->argvlen[i]);
+}
     resp_int(out, n);
     return n > 0;
 }
@@ -152,8 +160,9 @@ static int cmd_del(db *d, resp_cmd *c, buf *out)
 static int cmd_exists(db *d, resp_cmd *c, buf *out)
 {
     long long n = 0;
-    for (int i = 1; i < c->argc; i++)
+    for (int i = 1; i < c->argc; i++) {
         n += db_lookup(d, c->argv[i], c->argvlen[i]) != NULL;
+}
     resp_int(out, n);
     return 0;
 }
@@ -214,10 +223,12 @@ static int cmd_keys(db *d, resp_cmd *c, buf *out)
     dict_iter it;
     dict_iter_init(&it, d->main);
     for (entry *e = dict_iter_next(&it); e != NULL; e = dict_iter_next(&it)) {
-        if (!glob_match(c->argv[1], c->argvlen[1], e->key, e->keylen))
+        if (!glob_match(c->argv[1], c->argvlen[1], e->key, e->keylen)) {
             continue;
-        if (db_key_expired(d, e->key, e->keylen))
+}
+        if (db_key_expired(d, e->key, e->keylen)) {
             continue;
+}
         resp_bulk(&body, e->key, e->keylen);
         n++;
     }
@@ -254,10 +265,11 @@ static int cmd_ok(db *d, resp_cmd *c, buf *out)
 static int cmd_select(db *d, resp_cmd *c, buf *out)
 {
     (void)d;
-    if (arg_eq(c, 1, "0"))
+    if (arg_eq(c, 1, "0")) {
         resp_simple(out, "OK");
-    else
+    } else {
         resp_error(out, "ERR DB index is out of range");
+}
     return 0;
 }
 
@@ -277,10 +289,12 @@ static int cmd_select(db *d, resp_cmd *c, buf *out)
 
 static dict *debug_dict(db *d, resp_cmd *c, int i)
 {
-    if (arg_eq(c, i, "main"))
+    if (arg_eq(c, i, "main")) {
         return d->main;
-    if (arg_eq(c, i, "expires"))
+}
+    if (arg_eq(c, i, "expires")) {
         return d->expires;
+}
     return NULL;
 }
 
@@ -298,8 +312,9 @@ static void debug_table(buf *out, const table *t, int is_expires, long maxb)
     resp_array_len(out, n);
     for (long i = 0; i < n; i++) {
         long len = 0;
-        for (entry *e = t->buckets[i]; e != NULL; e = e->next)
+        for (entry *e = t->buckets[i]; e != NULL; e = e->next) {
             len++;
+}
         resp_array_len(out, len);
         for (entry *e = t->buckets[i]; e != NULL; e = e->next) {
             resp_array_len(out, 2);
@@ -381,8 +396,9 @@ static const command TABLE[] = {
 
 int cmd_execute(db *d, resp_cmd *c, buf *out)
 {
-    if (c->argc == 0)
+    if (c->argc == 0) {
         return 0;
+}
     const command *cmd = NULL;
     for (size_t i = 0; i < sizeof TABLE / sizeof TABLE[0]; i++) {
         if (c->argvlen[0] == strlen(TABLE[i].name) && strncasecmp(c->argv[0], TABLE[i].name, c->argvlen[0]) == 0) {
@@ -394,8 +410,9 @@ int cmd_execute(db *d, resp_cmd *c, buf *out)
         buf msg;
         buf_init(&msg);
         buf_appendf(&msg, "ERR unknown command '%.128s', with args beginning with: ", c->argv[0]);
-        for (int i = 1; i < c->argc && msg.len < 512; i++)
+        for (int i = 1; i < c->argc && msg.len < 512; i++) {
             buf_appendf(&msg, "'%.128s' ", c->argv[i]);
+}
         resp_error(out, msg.data);
         buf_free(&msg);
         return 0;
@@ -421,21 +438,26 @@ int glob_match(const char *p, size_t pl, const char *s, size_t sl)
                 p++;
                 pl--;
             }
-            if (pl == 1)
+            if (pl == 1) {
                 return 1;
-            for (size_t i = 0; i <= sl; i++)
-                if (glob_match(p + 1, pl - 1, s + i, sl - i))
+}
+            for (size_t i = 0; i <= sl; i++) {
+                if (glob_match(p + 1, pl - 1, s + i, sl - i)) {
                     return 1;
+}
+}
             return 0;
         case '?':
-            if (sl == 0)
+            if (sl == 0) {
                 return 0;
+}
             s++;
             sl--;
             break;
         case '[': {
-            if (sl == 0)
+            if (sl == 0) {
                 return 0;
+}
             p++;
             pl--;
             int neg = pl > 0 && p[0] == '^';
@@ -448,8 +470,9 @@ int glob_match(const char *p, size_t pl, const char *s, size_t sl)
                 if (p[0] == '\\' && pl >= 2) {
                     p++;
                     pl--;
-                    if (p[0] == s[0])
+                    if (p[0] == s[0]) {
                         match = 1;
+}
                 } else if (pl >= 3 && p[1] == '-') {
                     unsigned char lo = (unsigned char)p[0], hi = (unsigned char)p[2], ch = (unsigned char)s[0];
                     if (lo > hi) {
@@ -457,8 +480,9 @@ int glob_match(const char *p, size_t pl, const char *s, size_t sl)
                         lo = hi;
                         hi = t;
                     }
-                    if (ch >= lo && ch <= hi)
+                    if (ch >= lo && ch <= hi) {
                         match = 1;
+}
                     p += 2;
                     pl -= 2;
                 } else if (p[0] == s[0]) {
@@ -467,12 +491,15 @@ int glob_match(const char *p, size_t pl, const char *s, size_t sl)
                 p++;
                 pl--;
             }
-            if (pl == 0) /* 닫는 ] 없음: 패턴 끝까지 본 것으로 */
+            if (pl == 0) { /* 닫는 ] 없음: 패턴 끝까지 본 것으로 */
                 return 0;
-            if (neg)
+}
+            if (neg) {
                 match = !match;
-            if (!match)
+}
+            if (!match) {
                 return 0;
+}
             s++;
             sl--;
             break;
@@ -484,8 +511,9 @@ int glob_match(const char *p, size_t pl, const char *s, size_t sl)
             }
             /* fall through */
         default:
-            if (sl == 0 || p[0] != s[0])
+            if (sl == 0 || p[0] != s[0]) {
                 return 0;
+}
             s++;
             sl--;
             break;

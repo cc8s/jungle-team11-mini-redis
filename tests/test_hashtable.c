@@ -29,8 +29,9 @@ static int val_is(const entry *e, const char *v)
 static uint64_t num_hash(const char *key, size_t keylen)
 {
     uint64_t h = 0;
-    for (size_t i = 0; i < keylen; i++)
+    for (size_t i = 0; i < keylen; i++) {
         h = h * 10 + (uint64_t)(key[i] - '0');
+}
     return h;
 }
 
@@ -376,10 +377,12 @@ static void test_random_covers_all(void)
         set_s(d, k, k);
     }
     int seen[10] = {0};
-    for (int i = 0; i < 2000; i++)
+    for (int i = 0; i < 2000; i++) {
         mark(seen, dict_random_entry(d));
-    for (int i = 0; i < 10; i++)
+}
+    for (int i = 0; i < 10; i++) {
         CHECK(seen[i] > 0);
+}
     dict_free(d);
 }
 
@@ -396,12 +399,15 @@ static void test_random_during_rehash(void)
     dict_set_rand(NULL);
     srand(2);
     int seen[10] = {0};
-    for (int i = 0; i < 2000; i++)
+    for (int i = 0; i < 2000; i++) {
         mark(seen, dict_random_entry(d));
-    for (int i = 0; i <= 4; i++)
+}
+    for (int i = 0; i <= 4; i++) {
         CHECK(seen[i] > 0);
-    for (int i = 5; i < 10; i++)
+}
+    for (int i = 5; i < 10; i++) {
         CHECK(seen[i] == 0);
+}
     CHECK(d->rehashidx == 2); /* 진행시키지 않음 */
     CHECK(dict_len(d) == 5);
     dict_free(d);
@@ -417,8 +423,9 @@ static void test_random_within_chain(void)
     dict_set_rand(seq_rand);
     seq_next = 0;
     int seen[10] = {0};
-    for (int i = 0; i < 60; i++)
+    for (int i = 0; i < 60; i++) {
         mark(seen, dict_random_entry(d));
+}
     CHECK(seen[1] > 0 && seen[2] > 0 && seen[3] > 0);
     dict_set_rand(NULL);
     dict_free(d);
@@ -450,8 +457,9 @@ static void test_iter_all_once(void)
         n++;
     }
     CHECK(n == 1000);
-    for (int i = 0; i < 1000; i++)
+    for (int i = 0; i < 1000; i++) {
         CHECK(seen[i] == 1);
+}
     dict_free(d);
 }
 
@@ -464,10 +472,12 @@ static void test_iter_during_rehash(void)
     int seen[10] = {0};
     dict_iter it;
     dict_iter_init(&it, d);
-    for (entry *e = dict_iter_next(&it); e != NULL; e = dict_iter_next(&it))
+    for (entry *e = dict_iter_next(&it); e != NULL; e = dict_iter_next(&it)) {
         mark(seen, e);
-    for (int i = 0; i <= 4; i++)
+}
+    for (int i = 0; i <= 4; i++) {
         CHECK(seen[i] == 1);
+}
     CHECK(d->rehashidx == 1);
     dict_free(d);
 }

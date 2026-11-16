@@ -276,22 +276,26 @@ static void test_random_splits(void)
         while (fed < total || in.len > 0) {
             if (fed < total) {
                 size_t chunk = 1 + (size_t)rand() % 9;
-                if (chunk > total - fed)
+                if (chunk > total - fed) {
                     chunk = total - fed;
+}
                 CHECK(buf_append(&in, stream + fed, chunk) == 0);
                 fed += chunk;
             }
             for (;;) {
                 result r = parse(in.data, in.len);
-                if (r.st == RESP_INCOMPLETE)
+                if (r.st == RESP_INCOMPLETE) {
                     break;
+}
                 CHECK(r.st == RESP_OK);
                 CHECK(got < 5);
                 CHECK(r.cmd.argc == want_argc[got]);
-                if (got == 0)
+                if (got == 0) {
                     CHECK(arg_is(&r.cmd, 2, "ab\r\ncde", 7));
-                if (got == 3)
+}
+                if (got == 3) {
                     CHECK(arg_is(&r.cmd, 1, "k\0y", 3));
+}
                 got++;
                 buf_consume(&in, r.consumed);
                 resp_cmd_free(&r.cmd);

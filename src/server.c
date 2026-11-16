@@ -21,8 +21,8 @@
 typedef struct {
     int fd;
     buf in, out;
-    int closing;   /* 응답을 다 보낸 뒤 닫는다 */
-    int want_out;  /* EPOLLOUT 을 켜 두었나 */
+    int closing;  /* 응답을 다 보낸 뒤 닫는다 */
+    int want_out; /* EPOLLOUT 을 켜 두었나 */
 } client;
 
 static volatile sig_atomic_t stop_flag = 0;
@@ -58,7 +58,7 @@ static void set_events(client *c, int want_out)
 {
     if (c->want_out == want_out) {
         return;
-}
+    }
     struct epoll_event ev = {.events = EPOLLIN | (want_out ? EPOLLOUT : 0), .data.fd = c->fd};
     epoll_ctl(epfd, EPOLL_CTL_MOD, c->fd, &ev);
     c->want_out = want_out;
@@ -104,7 +104,7 @@ static int client_process(client *c, db *d)
         resp_status st = resp_parse(c->in.data + off, c->in.len - off, &cmd, &used, &err);
         if (st == RESP_INCOMPLETE) {
             break;
-}
+        }
         if (st == RESP_ERR) {
             resp_error(&c->out, err);
             c->closing = 1;
@@ -124,7 +124,8 @@ static int client_process(client *c, db *d)
 
 /* 공정성: 이벤트 한 번에 SERVER_READ_CHUNK 만 한 번 읽고 다음 손님으로 넘어간다.
  * 남은 데이터는 level-triggered epoll 이 다음 바퀴에 다시 알려 준다.
- * (EAGAIN 까지 계속 읽으면, 읽는 속도보다 빨리 보내는 손님에게서 루프가 못 빠져나와 다른 손님이 굶는다) */
+ * (EAGAIN 까지 계속 읽으면, 읽는 속도보다 빨리 보내는 손님에게서 루프가 못 빠져나와 다른 손님이
+ * 굶는다) */
 static void client_readable(client *c, db *d)
 {
     char tmp[SERVER_READ_CHUNK];
@@ -134,7 +135,7 @@ static void client_readable(client *c, db *d)
     } while (n < 0 && errno == EINTR);
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
         return;
-}
+    }
     if (n <= 0) { /* 0 = 상대가 닫음, 그 외 오류 */
         client_close(c);
         return;
@@ -145,7 +146,7 @@ static void client_readable(client *c, db *d)
     }
     if (client_process(c, d) != 0) {
         return;
-}
+    }
     client_flush(c);
 }
 
@@ -156,7 +157,7 @@ static void accept_all(int lfd)
         if (fd < 0) {
             if (errno == EINTR) {
                 continue;
-}
+            }
             return; /* EAGAIN 또는 일시적 오류 */
         }
         if (fd >= SERVER_MAX_CLIENTS) {
@@ -190,7 +191,8 @@ static void cron(db *d)
 {
     expire_active_cycle(d);
     int64_t until = mono_ms() + 1;
-    while (d->active_rehash && (dict_is_rehashing(d->main) || dict_is_rehashing(d->expires)) && mono_ms() < until) {
+    while (d->active_rehash && (dict_is_rehashing(d->main) || dict_is_rehashing(d->expires)) &&
+           mono_ms() < until) {
         dict_rehash_step(d->main, 100);
         dict_rehash_step(d->expires, 100);
     }
@@ -201,10 +203,11 @@ static int listen_on(int port)
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0) {
         return -1;
-}
+    }
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-    struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons((unsigned short)port),
+    struct sockaddr_in addr = {.sin_family = AF_INET,
+                               .sin_port = htons((unsigned short)port),
                                .sin_addr.s_addr = htonl(INADDR_ANY)};
     if (bind(fd, (struct sockaddr *)&addr, sizeof addr) != 0 || listen(fd, 511) != 0) {
         close(fd);
@@ -241,7 +244,7 @@ int server_run(const server_config *cfg)
         int n = epoll_wait(epfd, events, 256, wait > 0 ? (int)wait : 0);
         if (n < 0 && errno != EINTR) {
             break;
-}
+        }
         for (int i = 0; i < n; i++) {
             int fd = events[i].data.fd;
             if (fd == lfd) {
@@ -251,17 +254,17 @@ int server_run(const server_config *cfg)
             client *c = clients[fd];
             if (c == NULL) {
                 continue;
-}
+            }
             if (events[i].events & (EPOLLERR | EPOLLHUP)) {
                 client_close(c);
                 continue;
             }
             if (events[i].events & EPOLLOUT && client_flush(c) != 0) {
                 continue;
-}
+            }
             if (events[i].events & EPOLLIN) {
                 client_readable(c, d);
-}
+            }
         }
         if (mono_ms() >= next_cron) {
             cron(d);
@@ -272,8 +275,8 @@ int server_run(const server_config *cfg)
     for (int fd = 0; fd < SERVER_MAX_CLIENTS; fd++) {
         if (clients[fd] != NULL) {
             client_close(clients[fd]);
-}
-}
+        }
+    }
     close(lfd);
     close(epfd);
     db_free(d);

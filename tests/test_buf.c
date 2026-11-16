@@ -41,7 +41,7 @@ static void test_growth(void)
     CHECK(b.cap >= b.len);
     for (int i = 0; i < 100000; i += 997) {
         CHECK(b.data[i] == (char)('a' + i % 26));
-}
+    }
     CHECK(b.data[b.len] == '\0');
     buf_free(&b);
 }

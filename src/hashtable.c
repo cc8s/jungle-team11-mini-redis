@@ -20,7 +20,7 @@ static int table_init(table *t, size_t size)
     t->buckets = calloc(size, sizeof *t->buckets);
     if (t->buckets == NULL) {
         return -1;
-}
+    }
     t->size = size;
     t->mask = size - 1;
     t->used = 0;
@@ -62,10 +62,10 @@ static char *dup_bytes(const char *src, size_t len)
     char *p = malloc(len + 1);
     if (p == NULL) {
         return NULL;
-}
+    }
     if (len > 0) {
         memcpy(p, src, len);
-}
+    }
     p[len] = '\0';
     return p;
 }
@@ -77,7 +77,7 @@ dict *dict_create_with_hash(dict_hash_fn hash)
     dict *d = malloc(sizeof *d);
     if (d == NULL) {
         return NULL;
-}
+    }
     if (table_init(&d->ht[0], DICT_INITIAL_SIZE) != 0) {
         free(d);
         return NULL;
@@ -97,7 +97,7 @@ void dict_free(dict *d)
 {
     if (d == NULL) {
         return;
-}
+    }
     table_free(&d->ht[0]);
     table_free(&d->ht[1]);
     free(d);
@@ -120,7 +120,7 @@ void dict_rehash_step(dict *d, int n)
 {
     if (!dict_is_rehashing(d)) {
         return;
-}
+    }
     while (n-- > 0 && d->ht[0].used > 0 && (size_t)d->rehashidx < d->ht[0].size) {
         entry *e = d->ht[0].buckets[d->rehashidx];
         while (e != NULL) {
@@ -137,12 +137,13 @@ void dict_rehash_step(dict *d, int n)
     }
     if (d->ht[0].used == 0) {
         finish_rehash(d);
-}
+    }
 }
 
-/* 키를 찾는다. prev_out 에는 체인에서 바로 앞 노드(첫 노드면 NULL), table_out 에는 찾은 테이블 번호 */
-static entry *find(dict *d, const char *key, size_t keylen, uint64_t h,
-                   entry **prev_out, int *table_out)
+/* 키를 찾는다. prev_out 에는 체인에서 바로 앞 노드(첫 노드면 NULL), table_out 에는 찾은 테이블 번호
+ */
+static entry *find(dict *d, const char *key, size_t keylen, uint64_t h, entry **prev_out,
+                   int *table_out)
 {
     int tables = dict_is_rehashing(d) ? 2 : 1;
     for (int t = 0; t < tables; t++) {
@@ -152,10 +153,10 @@ static entry *find(dict *d, const char *key, size_t keylen, uint64_t h,
             if (e->keylen == keylen && (keylen == 0 || memcmp(e->key, key, keylen) == 0)) {
                 if (prev_out != NULL) {
                     *prev_out = prev;
-}
+                }
                 if (table_out != NULL) {
                     *table_out = t;
-}
+                }
                 return e;
             }
         }
@@ -167,10 +168,10 @@ static int start_rehash_if_needed(dict *d)
 {
     if (dict_is_rehashing(d) || d->ht[0].used < d->ht[0].size) {
         return 0;
-}
+    }
     if (table_init(&d->ht[1], d->ht[0].size * 2) != 0) {
         return -1;
-}
+    }
     d->rehashidx = 0;
     return 0;
 }
@@ -179,7 +180,7 @@ int dict_set(dict *d, const char *key, size_t keylen, const char *val, size_t va
 {
     if (dict_is_rehashing(d)) {
         dict_rehash_step(d, 1);
-}
+    }
 
     uint64_t h = d->hash(key, keylen);
     entry *e = find(d, key, keylen, h, NULL, NULL);
@@ -187,7 +188,7 @@ int dict_set(dict *d, const char *key, size_t keylen, const char *val, size_t va
         char *nv = dup_bytes(val, vallen);
         if (nv == NULL) {
             return -1;
-}
+        }
         free(e->val);
         e->val = nv;
         e->vallen = vallen;
@@ -196,12 +197,12 @@ int dict_set(dict *d, const char *key, size_t keylen, const char *val, size_t va
 
     if (start_rehash_if_needed(d) != 0) {
         return -1;
-}
+    }
 
     e = malloc(sizeof *e);
     if (e == NULL) {
         return -1;
-}
+    }
     e->key = dup_bytes(key, keylen);
     e->val = dup_bytes(val, vallen);
     if (e->key == NULL || e->val == NULL) {
@@ -223,7 +224,7 @@ entry *dict_get(dict *d, const char *key, size_t keylen)
 {
     if (dict_is_rehashing(d)) {
         dict_rehash_step(d, 1);
-}
+    }
     return find(d, key, keylen, d->hash(key, keylen), NULL, NULL);
 }
 
@@ -240,7 +241,7 @@ entry *dict_random_entry(dict *d)
 {
     if (dict_len(d) == 0) {
         return NULL;
-}
+    }
 
     entry *head;
     do {
@@ -249,7 +250,8 @@ entry *dict_random_entry(dict *d)
             size_t skip = (size_t)d->rehashidx;
             size_t span = d->ht[0].size + d->ht[1].size - skip;
             size_t idx = skip + (size_t)rand_impl() % span;
-            head = idx < d->ht[0].size ? d->ht[0].buckets[idx] : d->ht[1].buckets[idx - d->ht[0].size];
+            head =
+                idx < d->ht[0].size ? d->ht[0].buckets[idx] : d->ht[1].buckets[idx - d->ht[0].size];
         } else {
             head = d->ht[0].buckets[(size_t)rand_impl() & d->ht[0].mask];
         }
@@ -258,11 +260,11 @@ entry *dict_random_entry(dict *d)
     size_t len = 0;
     for (entry *e = head; e != NULL; e = e->next) {
         len++;
-}
+    }
     size_t pick = (size_t)rand_impl() % len;
     while (pick-- > 0) {
         head = head->next;
-}
+    }
     return head;
 }
 
@@ -315,7 +317,7 @@ int dict_del(dict *d, const char *key, size_t keylen)
 {
     if (dict_is_rehashing(d)) {
         dict_rehash_step(d, 1);
-}
+    }
 
     uint64_t h = d->hash(key, keylen);
     entry *prev = NULL;
@@ -323,14 +325,14 @@ int dict_del(dict *d, const char *key, size_t keylen)
     entry *e = find(d, key, keylen, h, &prev, &t);
     if (e == NULL) {
         return 0;
-}
+    }
 
     table *tb = &d->ht[t];
     if (prev == NULL) {
         tb->buckets[h & tb->mask] = e->next;
     } else {
         prev->next = e->next;
-}
+    }
     tb->used--;
     entry_free(e);
     return 1;

@@ -5,11 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+
 #include "expire.h"
 
-#define ERR_INT "ERR value is not an integer or out of range"
+#define ERR_INT    "ERR value is not an integer or out of range"
 #define ERR_SYNTAX "ERR syntax error"
-#define ERR_OOM "OOM command not allowed when used memory > 'maxmemory'."
+#define ERR_OOM    "OOM command not allowed when used memory > 'maxmemory'."
 
 typedef int (*cmd_fn)(db *d, resp_cmd *c, buf *out);
 
@@ -32,17 +33,18 @@ static int to_ll(const char *p, size_t n, long long *out)
     }
     if (i == n || n > 20) {
         return -1;
-}
+    }
     unsigned long long v = 0;
-    const unsigned long long limit = neg ? (unsigned long long)LLONG_MAX + 1 : (unsigned long long)LLONG_MAX;
+    const unsigned long long limit =
+        neg ? (unsigned long long)LLONG_MAX + 1 : (unsigned long long)LLONG_MAX;
     for (; i < n; i++) {
         if (p[i] < '0' || p[i] > '9') {
             return -1;
-}
+        }
         unsigned d = (unsigned)(p[i] - '0');
         if (v > (limit - d) / 10) {
             return -1;
-}
+        }
         v = v * 10 + d;
     }
     *out = neg ? (long long)(0 - v) : (long long)v;
@@ -66,12 +68,12 @@ static int to_when(long long amount, long long unit, int64_t *when)
 {
     if (amount > LLONG_MAX / unit || amount < LLONG_MIN / unit) {
         return -1;
-}
+    }
     long long ms = amount * unit;
     int64_t now = now_ms();
     if ((ms > 0 && now > LLONG_MAX - ms) || (ms < 0 && now < LLONG_MIN - ms)) {
         return -1;
-}
+    }
     *when = now + ms;
     return 0;
 }
@@ -85,7 +87,7 @@ static int cmd_ping(db *d, resp_cmd *c, buf *out)
         resp_simple(out, "PONG");
     } else {
         resp_bulk(out, c->argv[1], c->argvlen[1]);
-}
+    }
     return 0;
 }
 
@@ -143,7 +145,7 @@ static int cmd_get(db *d, resp_cmd *c, buf *out)
         resp_null(out);
     } else {
         resp_bulk(out, e->val, e->vallen);
-}
+    }
     return 0;
 }
 
@@ -152,7 +154,7 @@ static int cmd_del(db *d, resp_cmd *c, buf *out)
     long long n = 0;
     for (int i = 1; i < c->argc; i++) {
         n += db_del(d, c->argv[i], c->argvlen[i]);
-}
+    }
     resp_int(out, n);
     return n > 0;
 }
@@ -162,7 +164,7 @@ static int cmd_exists(db *d, resp_cmd *c, buf *out)
     long long n = 0;
     for (int i = 1; i < c->argc; i++) {
         n += db_lookup(d, c->argv[i], c->argvlen[i]) != NULL;
-}
+    }
     resp_int(out, n);
     return 0;
 }
@@ -214,7 +216,8 @@ static int cmd_persist(db *d, resp_cmd *c, buf *out)
     return r;
 }
 
-/* 순회 중에는 main 을 건드리지 않는다: 만료 판정은 expires 만 보는 db_key_expired, 응답은 모았다가 한 번에 */
+/* 순회 중에는 main 을 건드리지 않는다: 만료 판정은 expires 만 보는 db_key_expired, 응답은 모았다가
+ * 한 번에 */
 static int cmd_keys(db *d, resp_cmd *c, buf *out)
 {
     buf body;
@@ -225,10 +228,10 @@ static int cmd_keys(db *d, resp_cmd *c, buf *out)
     for (entry *e = dict_iter_next(&it); e != NULL; e = dict_iter_next(&it)) {
         if (!glob_match(c->argv[1], c->argvlen[1], e->key, e->keylen)) {
             continue;
-}
+        }
         if (db_key_expired(d, e->key, e->keylen)) {
             continue;
-}
+        }
         resp_bulk(&body, e->key, e->keylen);
         n++;
     }
@@ -269,32 +272,32 @@ static int cmd_select(db *d, resp_cmd *c, buf *out)
         resp_simple(out, "OK");
     } else {
         resp_error(out, "ERR DB index is out of range");
-}
+    }
     return 0;
 }
 
 /* ---- DEBUG: 웹 인스펙터용 (진짜 Redis 의 DEBUG 와 이름만 같고 내용은 다름) ----
  *
- * DEBUG HT main|expires [maxbuckets]   해시 테이블 내부를 그대로 보여 준다. 읽기 전용: rehash 도, lazy 만료도 일으키지 않는다
- *   응답: [ "now_ms", n, "used_memory", n, "maxmemory", n, "evicted", n, "active_rehash", 0|1,
- *           "rehashidx", n, "tables", [ ht0, ht1 ] ]
- *   ht  = [ 버킷 수, 키 수, [ 버킷0, 버킷1, ... ] ]   (앞에서 maxbuckets 개까지만, 기본 1024)
- *   버킷 = [ 엔트리, ... ]                            (체인 순서 그대로)
- *   엔트리 = [ 키, 값 ] (main) 또는 [ 키, 만료 시각 ms ] (expires). 키·값은 앞 DEBUG_SHOW_BYTES 바이트만
- * DEBUG REHASHSTEP main|expires n      rehash 를 n 칸 진행하고 rehashidx 를 돌려준다
- * DEBUG ACTIVEREHASH on|off            cron 의 rehash 를 켜고 끈다 (끄면 옮기는 도중을 관찰할 수 있다) */
+ * DEBUG HT main|expires [maxbuckets]   해시 테이블 내부를 그대로 보여 준다. 읽기 전용: rehash 도,
+ * lazy 만료도 일으키지 않는다 응답: [ "now_ms", n, "used_memory", n, "maxmemory", n, "evicted", n,
+ * "active_rehash", 0|1, "rehashidx", n, "tables", [ ht0, ht1 ] ] ht  = [ 버킷 수, 키 수, [ 버킷0,
+ * 버킷1, ... ] ]   (앞에서 maxbuckets 개까지만, 기본 1024) 버킷 = [ 엔트리, ... ] (체인 순서
+ * 그대로) 엔트리 = [ 키, 값 ] (main) 또는 [ 키, 만료 시각 ms ] (expires). 키·값은 앞
+ * DEBUG_SHOW_BYTES 바이트만 DEBUG REHASHSTEP main|expires n      rehash 를 n 칸 진행하고 rehashidx
+ * 를 돌려준다 DEBUG ACTIVEREHASH on|off            cron 의 rehash 를 켜고 끈다 (끄면 옮기는 도중을
+ * 관찰할 수 있다) */
 
-#define DEBUG_SHOW_BYTES 256
+#define DEBUG_SHOW_BYTES  256
 #define DEBUG_MAX_BUCKETS 65536
 
 static dict *debug_dict(db *d, resp_cmd *c, int i)
 {
     if (arg_eq(c, i, "main")) {
         return d->main;
-}
+    }
     if (arg_eq(c, i, "expires")) {
         return d->expires;
-}
+    }
     return NULL;
 }
 
@@ -314,7 +317,7 @@ static void debug_table(buf *out, const table *t, int is_expires, long maxb)
         long len = 0;
         for (entry *e = t->buckets[i]; e != NULL; e = e->next) {
             len++;
-}
+        }
         resp_array_len(out, len);
         for (entry *e = t->buckets[i]; e != NULL; e = e->next) {
             resp_array_len(out, 2);
@@ -340,7 +343,8 @@ static int cmd_debug(db *d, resp_cmd *c, buf *out)
             return 0;
         }
         n = 1024;
-        if (c->argc == 4 && (to_ll(c->argv[3], c->argvlen[3], &n) < 0 || n < 1 || n > DEBUG_MAX_BUCKETS)) {
+        if (c->argc == 4 &&
+            (to_ll(c->argv[3], c->argvlen[3], &n) < 0 || n < 1 || n > DEBUG_MAX_BUCKETS)) {
             resp_error(out, "ERR maxbuckets must be between 1 and 65536");
             return 0;
         }
@@ -376,7 +380,8 @@ static int cmd_debug(db *d, resp_cmd *c, buf *out)
         resp_int(out, t->rehashidx);
         return 0;
     }
-    if (arg_eq(c, 1, "activerehash") && c->argc == 3 && (arg_eq(c, 2, "on") || arg_eq(c, 2, "off"))) {
+    if (arg_eq(c, 1, "activerehash") && c->argc == 3 &&
+        (arg_eq(c, 2, "on") || arg_eq(c, 2, "off"))) {
         d->active_rehash = arg_eq(c, 2, "on");
         resp_simple(out, "OK");
         return 0;
@@ -386,22 +391,35 @@ static int cmd_debug(db *d, resp_cmd *c, buf *out)
 }
 
 static const command TABLE[] = {
-    {"ping", -1, cmd_ping},       {"echo", 2, cmd_ping},        {"set", -3, cmd_set},         {"get", 2, cmd_get},
-    {"del", -2, cmd_del},         {"exists", -2, cmd_exists},   {"expire", 3, cmd_expire},
-    {"pexpire", 3, cmd_pexpire},  {"ttl", 2, cmd_ttl},          {"pttl", 2, cmd_pttl},
-    {"persist", 2, cmd_persist},  {"keys", 2, cmd_keys},        {"flushall", -1, cmd_flushall},
-    {"command", -1, cmd_empty_array}, {"config", -2, cmd_empty_array}, {"client", -2, cmd_ok},
-    {"select", 2, cmd_select},    {"debug", -3, cmd_debug},
+    {"ping", -1, cmd_ping},
+    {"echo", 2, cmd_ping},
+    {"set", -3, cmd_set},
+    {"get", 2, cmd_get},
+    {"del", -2, cmd_del},
+    {"exists", -2, cmd_exists},
+    {"expire", 3, cmd_expire},
+    {"pexpire", 3, cmd_pexpire},
+    {"ttl", 2, cmd_ttl},
+    {"pttl", 2, cmd_pttl},
+    {"persist", 2, cmd_persist},
+    {"keys", 2, cmd_keys},
+    {"flushall", -1, cmd_flushall},
+    {"command", -1, cmd_empty_array},
+    {"config", -2, cmd_empty_array},
+    {"client", -2, cmd_ok},
+    {"select", 2, cmd_select},
+    {"debug", -3, cmd_debug},
 };
 
 int cmd_execute(db *d, resp_cmd *c, buf *out)
 {
     if (c->argc == 0) {
         return 0;
-}
+    }
     const command *cmd = NULL;
     for (size_t i = 0; i < sizeof TABLE / sizeof TABLE[0]; i++) {
-        if (c->argvlen[0] == strlen(TABLE[i].name) && strncasecmp(c->argv[0], TABLE[i].name, c->argvlen[0]) == 0) {
+        if (c->argvlen[0] == strlen(TABLE[i].name) &&
+            strncasecmp(c->argv[0], TABLE[i].name, c->argvlen[0]) == 0) {
             cmd = &TABLE[i];
             break;
         }
@@ -412,7 +430,7 @@ int cmd_execute(db *d, resp_cmd *c, buf *out)
         buf_appendf(&msg, "ERR unknown command '%.128s', with args beginning with: ", c->argv[0]);
         for (int i = 1; i < c->argc && msg.len < 512; i++) {
             buf_appendf(&msg, "'%.128s' ", c->argv[i]);
-}
+        }
         resp_error(out, msg.data);
         buf_free(&msg);
         return 0;
@@ -440,24 +458,24 @@ int glob_match(const char *p, size_t pl, const char *s, size_t sl)
             }
             if (pl == 1) {
                 return 1;
-}
+            }
             for (size_t i = 0; i <= sl; i++) {
                 if (glob_match(p + 1, pl - 1, s + i, sl - i)) {
                     return 1;
-}
-}
+                }
+            }
             return 0;
         case '?':
             if (sl == 0) {
                 return 0;
-}
+            }
             s++;
             sl--;
             break;
         case '[': {
             if (sl == 0) {
                 return 0;
-}
+            }
             p++;
             pl--;
             int neg = pl > 0 && p[0] == '^';
@@ -472,9 +490,10 @@ int glob_match(const char *p, size_t pl, const char *s, size_t sl)
                     pl--;
                     if (p[0] == s[0]) {
                         match = 1;
-}
+                    }
                 } else if (pl >= 3 && p[1] == '-') {
-                    unsigned char lo = (unsigned char)p[0], hi = (unsigned char)p[2], ch = (unsigned char)s[0];
+                    unsigned char lo = (unsigned char)p[0], hi = (unsigned char)p[2],
+                                  ch = (unsigned char)s[0];
                     if (lo > hi) {
                         unsigned char t = lo;
                         lo = hi;
@@ -482,7 +501,7 @@ int glob_match(const char *p, size_t pl, const char *s, size_t sl)
                     }
                     if (ch >= lo && ch <= hi) {
                         match = 1;
-}
+                    }
                     p += 2;
                     pl -= 2;
                 } else if (p[0] == s[0]) {
@@ -493,13 +512,13 @@ int glob_match(const char *p, size_t pl, const char *s, size_t sl)
             }
             if (pl == 0) { /* 닫는 ] 없음: 패턴 끝까지 본 것으로 */
                 return 0;
-}
+            }
             if (neg) {
                 match = !match;
-}
+            }
             if (!match) {
                 return 0;
-}
+            }
             s++;
             sl--;
             break;
@@ -513,7 +532,7 @@ int glob_match(const char *p, size_t pl, const char *s, size_t sl)
         default:
             if (sl == 0 || p[0] != s[0]) {
                 return 0;
-}
+            }
             s++;
             sl--;
             break;

@@ -15,12 +15,11 @@ typedef struct {
     size_t cap;
 } buf;
 
-void buf_init(buf *b);  /* 빈 버퍼. 메모리는 처음 append 할 때 잡는다 */
-void buf_free(buf *b);  /* 해제하고 빈 버퍼로 */
-int buf_append(buf *b, const char *p, size_t n);          /* 실패 -1 (버퍼는 그대로) */
-int buf_appendf(buf *b, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));                /* 실패 -1 */
-void buf_consume(buf *b, size_t n);                       /* 앞에서 n 바이트 버림. n >= len 이면 비움 */
-void buf_clear(buf *b);                                   /* len = 0, 메모리는 유지 */
+void buf_init(buf *b); /* 빈 버퍼. 메모리는 처음 append 할 때 잡는다 */
+void buf_free(buf *b); /* 해제하고 빈 버퍼로 */
+int buf_append(buf *b, const char *p, size_t n); /* 실패 -1 (버퍼는 그대로) */
+int buf_appendf(buf *b, const char *fmt, ...) __attribute__((format(printf, 2, 3))); /* 실패 -1 */
+void buf_consume(buf *b, size_t n); /* 앞에서 n 바이트 버림. n >= len 이면 비움 */
+void buf_clear(buf *b);             /* len = 0, 메모리는 유지 */
 
 #endif

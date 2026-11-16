@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+
 #include "expire.h"
 
 size_t db_entry_cost(size_t kl, size_t vl)
@@ -14,7 +15,7 @@ db *db_create(size_t maxmemory, int policy)
     db *d = calloc(1, sizeof *d);
     if (d == NULL) {
         return NULL;
-}
+    }
     d->main = dict_create();
     d->expires = dict_create();
     if (d->main == NULL || d->expires == NULL) {
@@ -31,7 +32,7 @@ void db_free(db *d)
 {
     if (d == NULL) {
         return;
-}
+    }
     dict_free(d->main);
     dict_free(d->expires);
     free(d);
@@ -44,7 +45,7 @@ static int64_t when_of(db *d, const char *k, size_t kl, int *has)
     *has = x != NULL;
     if (x == NULL) {
         return 0;
-}
+    }
     int64_t when;
     memcpy(&when, x->val, sizeof when);
     return when;
@@ -63,7 +64,7 @@ static int remove_key(db *d, const char *k, size_t kl)
     entry *e = dict_get(d->main, k, kl);
     if (e == NULL) {
         return 0;
-}
+    }
     d->used -= db_entry_cost(kl, e->vallen);
     dict_del(d->main, k, kl);
     if (dict_get(d->expires, k, kl) != NULL) {
@@ -78,7 +79,7 @@ entry *db_lookup(db *d, const char *k, size_t kl)
     entry *e = dict_get(d->main, k, kl);
     if (e == NULL) {
         return NULL;
-}
+    }
     if (db_key_expired(d, k, kl)) {
         remove_key(d, k, kl);
         return NULL;
@@ -92,7 +93,7 @@ int db_set(db *d, const char *k, size_t kl, const char *v, size_t vl)
     size_t old = e != NULL ? db_entry_cost(kl, e->vallen) : 0;
     if (dict_set(d->main, k, kl, v, vl) < 0) {
         return -1;
-}
+    }
     d->used = d->used - old + db_entry_cost(kl, vl);
     if (dict_get(d->expires, k, kl) != NULL) {
         d->used -= db_entry_cost(kl, sizeof(int64_t));
@@ -114,7 +115,7 @@ int db_set_expire(db *d, const char *k, size_t kl, int64_t when_ms)
 {
     if (db_lookup(d, k, kl) == NULL) {
         return 0;
-}
+    }
     if (when_ms <= now_ms()) {
         remove_key(d, k, kl);
         return 1;
@@ -122,10 +123,10 @@ int db_set_expire(db *d, const char *k, size_t kl, int64_t when_ms)
     int had = dict_get(d->expires, k, kl) != NULL;
     if (dict_set(d->expires, k, kl, (const char *)&when_ms, sizeof when_ms) < 0) {
         return -1;
-}
+    }
     if (!had) {
         d->used += db_entry_cost(kl, sizeof(int64_t));
-}
+    }
     return 1;
 }
 
@@ -133,12 +134,12 @@ int64_t db_ttl_ms(db *d, const char *k, size_t kl)
 {
     if (db_lookup(d, k, kl) == NULL) {
         return -2;
-}
+    }
     int has;
     int64_t when = when_of(d, k, kl, &has);
     if (!has) {
         return -1;
-}
+    }
     int64_t left = when - now_ms();
     return left < 0 ? 0 : left;
 }
@@ -147,10 +148,10 @@ int db_persist(db *d, const char *k, size_t kl)
 {
     if (db_lookup(d, k, kl) == NULL) {
         return 0;
-}
+    }
     if (dict_get(d->expires, k, kl) == NULL) {
         return 0;
-}
+    }
     d->used -= db_entry_cost(kl, sizeof(int64_t));
     dict_del(d->expires, k, kl);
     return 1;
@@ -177,23 +178,23 @@ int db_make_room(db *d, size_t need)
 {
     if (d->maxmemory == 0) {
         return 0;
-}
+    }
     if (need > d->maxmemory) {
         return -1;
-}
+    }
     while (d->used + need > d->maxmemory) {
         if (d->policy != DB_ALLKEYS_RANDOM) {
             return -1;
-}
+        }
         entry *e = dict_random_entry(d->main);
         if (e == NULL) {
             return -1;
-}
+        }
         /* remove_key 가 이 엔트리를 해제하므로 키를 먼저 복사한다 */
         char *k = malloc(e->keylen + 1);
         if (k == NULL) {
             return -1;
-}
+        }
         size_t kl = e->keylen;
         memcpy(k, e->key, kl);
         remove_key(d, k, kl);

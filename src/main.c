@@ -8,9 +8,8 @@
 
 static void usage(void)
 {
-    fprintf(stderr,
-            "사용법: mini-redis [--port 6379] [--maxmemory <바이트|숫자kb|mb|gb>]\n"
-            "                   [--maxmemory-policy noeviction|allkeys-random]\n");
+    fprintf(stderr, "사용법: mini-redis [--port 6379] [--maxmemory <바이트|숫자kb|mb|gb>]\n"
+                    "                   [--maxmemory-policy noeviction|allkeys-random]\n");
 }
 
 /* "100", "64kb", "100mb", "1gb" → 바이트. 실패 -1 */
@@ -20,19 +19,19 @@ static long long parse_size(const char *s)
     long long v = strtoll(s, &end, 10);
     if (end == s || v < 0) {
         return -1;
-}
+    }
     if (*end == '\0' || strcasecmp(end, "b") == 0) {
         return v;
-}
+    }
     if (strcasecmp(end, "kb") == 0) {
         return v * 1024;
-}
+    }
     if (strcasecmp(end, "mb") == 0) {
         return v * 1024 * 1024;
-}
+    }
     if (strcasecmp(end, "gb") == 0) {
         return v * 1024 * 1024 * 1024;
-}
+    }
     return -1;
 }
 

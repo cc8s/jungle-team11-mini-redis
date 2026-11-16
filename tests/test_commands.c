@@ -1,6 +1,7 @@
 #include "test.h"
 
 #include <stdarg.h>
+
 #include "commands.h"
 #include "expire.h"
 
@@ -35,7 +36,7 @@ static int run(const char *want, int argc, ...)
     int ok = OUT.len == strlen(want) && memcmp(OUT.data, want, OUT.len) == 0;
     if (!ok && want[0] != '\0') { /* want 가 "" 이면 실행만 하고 응답은 호출자가 본다 */
         fprintf(stderr, "  want: %s\n  got:  %.*s\n", want, (int)OUT.len, OUT.data ? OUT.data : "");
-}
+    }
     return ok;
 }
 
@@ -81,11 +82,11 @@ static void test_set_options(void)
     CHECK(run(":10\r\n", 2, "TTL", "a"));
     CHECK(run("+OK\r\n", 5, "SET", "b", "1", "px", "1500"));
     CHECK(run(":1500\r\n", 2, "PTTL", "b"));
-    CHECK(run("$-1\r\n", 4, "SET", "a", "2", "NX"));  /* 있으니 안 씀 */
+    CHECK(run("$-1\r\n", 4, "SET", "a", "2", "NX")); /* 있으니 안 씀 */
     CHECK(last_write == 0);
     CHECK(run("$1\r\n1\r\n", 2, "GET", "a"));
     CHECK(run("+OK\r\n", 4, "SET", "c", "1", "NX"));
-    CHECK(run("$-1\r\n", 4, "SET", "d", "1", "XX"));  /* 없으니 안 씀 */
+    CHECK(run("$-1\r\n", 4, "SET", "d", "1", "XX")); /* 없으니 안 씀 */
     CHECK(run("+OK\r\n", 4, "SET", "c", "2", "xx"));
     CHECK(run("+OK\r\n", 6, "SET", "e", "1", "NX", "EX", "5"));
     CHECK(run("-ERR syntax error\r\n", 5, "SET", "k", "v", "NX", "XX"));
@@ -95,7 +96,8 @@ static void test_set_options(void)
     CHECK(run("-ERR value is not an integer or out of range\r\n", 5, "SET", "k", "v", "EX", "abc"));
     CHECK(run("-ERR invalid expire time in 'set' command\r\n", 5, "SET", "k", "v", "EX", "0"));
     CHECK(run("-ERR invalid expire time in 'set' command\r\n", 5, "SET", "k", "v", "PX", "-5"));
-    CHECK(run("-ERR invalid expire time in 'set' command\r\n", 5, "SET", "k", "v", "EX", "9223372036854775807"));
+    CHECK(run("-ERR invalid expire time in 'set' command\r\n", 5, "SET", "k", "v", "EX",
+              "9223372036854775807"));
     CHECK(run("$-1\r\n", 2, "GET", "k")); /* 오류면 아무것도 안 씀 */
 }
 
@@ -136,7 +138,7 @@ static void test_expire_family(void)
     fake_now += 9400; /* 600ms 남음 → 반올림 1 */
     CHECK(run(":1\r\n", 2, "TTL", "k"));
     CHECK(run(":600\r\n", 2, "PTTL", "k"));
-    fake_now += 200;  /* 400ms 남음 → 반올림 0 */
+    fake_now += 200; /* 400ms 남음 → 반올림 0 */
     CHECK(run(":0\r\n", 2, "TTL", "k"));
     CHECK(run(":1\r\n", 2, "PERSIST", "k"));
     CHECK(run(":0\r\n", 2, "PERSIST", "k"));
@@ -158,9 +160,12 @@ static void test_expire_edges(void)
     CHECK(run(":0\r\n", 2, "EXISTS", "b"));
     run("+OK\r\n", 3, "SET", "c", "1");
     CHECK(run("-ERR value is not an integer or out of range\r\n", 3, "EXPIRE", "c", "1.5"));
-    CHECK(run("-ERR value is not an integer or out of range\r\n", 3, "EXPIRE", "c", "99999999999999999999"));
-    CHECK(run("-ERR invalid expire time in 'expire' command\r\n", 3, "EXPIRE", "c", "9223372036854775807"));
-    CHECK(run("-ERR invalid expire time in 'pexpire' command\r\n", 3, "PEXPIRE", "c", "9223372036854775807"));
+    CHECK(run("-ERR value is not an integer or out of range\r\n", 3, "EXPIRE", "c",
+              "99999999999999999999"));
+    CHECK(run("-ERR invalid expire time in 'expire' command\r\n", 3, "EXPIRE", "c",
+              "9223372036854775807"));
+    CHECK(run("-ERR invalid expire time in 'pexpire' command\r\n", 3, "PEXPIRE", "c",
+              "9223372036854775807"));
     CHECK(run(":-1\r\n", 2, "TTL", "c")); /* 오류면 그대로 */
 }
 
@@ -215,7 +220,8 @@ static void test_unknown(void)
 {
     reset(0, DB_NOEVICTION);
     CHECK(run("-ERR unknown command 'foo', with args beginning with: \r\n", 1, "foo"));
-    CHECK(run("-ERR unknown command 'INCR', with args beginning with: 'a' 'b' \r\n", 3, "INCR", "a", "b"));
+    CHECK(run("-ERR unknown command 'INCR', with args beginning with: 'a' 'b' \r\n", 3, "INCR", "a",
+              "b"));
     CHECK(run("", 0));
     CHECK(last_write == 0);
 }
@@ -257,7 +263,8 @@ static void test_binary_roundtrip(void)
 {
     reset(0, DB_NOEVICTION);
     resp_cmd c;
-    static const char in[] = "*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$5\r\na\0b\r\n\r\n"; /* 값 = a \0 b \r \n */
+    static const char in[] =
+        "*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$5\r\na\0b\r\n\r\n"; /* 값 = a \0 b \r \n */
     size_t used;
     const char *err;
     CHECK(resp_parse(in, sizeof in - 1, &c, &used, &err) == RESP_OK);
@@ -275,8 +282,9 @@ static int out_is(const buf *want)
 {
     int ok = OUT.len == want->len && memcmp(OUT.data, want->data, OUT.len) == 0;
     if (!ok) {
-        fprintf(stderr, "  want: %.*s\n  got:  %.*s\n", (int)want->len, want->data, (int)OUT.len, OUT.data);
-}
+        fprintf(stderr, "  want: %.*s\n  got:  %.*s\n", (int)want->len, want->data, (int)OUT.len,
+                OUT.data);
+    }
     return ok;
 }
 
@@ -289,18 +297,21 @@ static void test_debug_ht_shape(void)
     for (int maxb = 4; maxb >= 2; maxb -= 2) {
         buf w;
         buf_init(&w);
-        buf_appendf(&w, "*14\r\n$6\r\nnow_ms\r\n:1000000\r\n$11\r\nused_memory\r\n:%zu\r\n", db_entry_cost(1, 1));
-        buf_appendf(&w, "$9\r\nmaxmemory\r\n:0\r\n$7\r\nevicted\r\n:0\r\n$13\r\nactive_rehash\r\n:1\r\n");
-        buf_appendf(&w, "$9\r\nrehashidx\r\n:-1\r\n$6\r\ntables\r\n*2\r\n*3\r\n:4\r\n:1\r\n*%d\r\n", maxb);
+        buf_appendf(&w, "*14\r\n$6\r\nnow_ms\r\n:1000000\r\n$11\r\nused_memory\r\n:%zu\r\n",
+                    db_entry_cost(1, 1));
+        buf_appendf(
+            &w, "$9\r\nmaxmemory\r\n:0\r\n$7\r\nevicted\r\n:0\r\n$13\r\nactive_rehash\r\n:1\r\n");
+        buf_appendf(&w, "$9\r\nrehashidx\r\n:-1\r\n$6\r\ntables\r\n*2\r\n*3\r\n:4\r\n:1\r\n*%d\r\n",
+                    maxb);
         for (size_t i = 0; i < (size_t)maxb; i++) {
             buf_appendf(&w, i == slot ? "*1\r\n*2\r\n$1\r\na\r\n$1\r\n1\r\n" : "*0\r\n");
-}
+        }
         buf_appendf(&w, "*3\r\n:0\r\n:0\r\n*0\r\n");
         if (maxb == 4) {
             EXEC(3, "DEBUG", "HT", "main");
         } else {
             EXEC(4, "debug", "ht", "main", "2");
-}
+        }
         CHECK(out_is(&w));
         buf_free(&w);
     }
@@ -318,15 +329,16 @@ static void test_debug_readonly_and_step(void)
     const char *k[] = {"k1", "k2", "k3", "k4", "k5"};
     for (int i = 0; i < 5; i++) {
         run("+OK\r\n", 3, "SET", k[i], "v");
-}
+    }
     CHECK(dict_is_rehashing(D->main)); /* 5번째 키에서 4 → 8 rehash 시작 */
     long idx = D->main->rehashidx;
     for (int i = 0; i < 3; i++) {
         EXEC(3, "DEBUG", "HT", "main");
-}
+    }
     CHECK(D->main->rehashidx == idx);
 
-    EXEC(4, "DEBUG", "REHASHSTEP", "main", "1"); /* 한 칸: 그 버킷에 키가 몰려 있었으면 바로 끝날 수도 있다 */
+    EXEC(4, "DEBUG", "REHASHSTEP", "main",
+         "1"); /* 한 칸: 그 버킷에 키가 몰려 있었으면 바로 끝날 수도 있다 */
     char want[32];
     snprintf(want, sizeof want, ":%ld\r\n", D->main->rehashidx);
     CHECK(D->main->rehashidx != idx && strcmp(OUT.data, want) == 0);
@@ -357,16 +369,23 @@ static void test_debug_errors(void)
     CHECK(run("-ERR wrong number of arguments for 'debug' command\r\n", 2, "DEBUG", "HT"));
     CHECK(run("-ERR DEBUG HT target must be 'main' or 'expires'\r\n", 3, "DEBUG", "HT", "foo"));
     CHECK(run("-ERR maxbuckets must be between 1 and 65536\r\n", 4, "DEBUG", "HT", "main", "0"));
-    CHECK(run("-ERR maxbuckets must be between 1 and 65536\r\n", 4, "DEBUG", "HT", "main", "65537"));
+    CHECK(
+        run("-ERR maxbuckets must be between 1 and 65536\r\n", 4, "DEBUG", "HT", "main", "65537"));
     CHECK(run("-ERR maxbuckets must be between 1 and 65536\r\n", 4, "DEBUG", "HT", "main", "x"));
     EXEC(4, "DEBUG", "HT", "main", "65536");
     CHECK(OUT.data[0] == '*');
-    CHECK(run("-ERR steps must be between 1 and 1000000\r\n", 4, "DEBUG", "REHASHSTEP", "main", "0"));
-    CHECK(run("-ERR steps must be between 1 and 1000000\r\n", 4, "DEBUG", "REHASHSTEP", "main", "1000001"));
-    CHECK(run("-ERR DEBUG REHASHSTEP target must be 'main' or 'expires'\r\n", 4, "DEBUG", "REHASHSTEP", "x", "1"));
-    CHECK(run("-ERR unknown DEBUG subcommand. Try HT, REHASHSTEP, ACTIVEREHASH\r\n", 3, "DEBUG", "ACTIVEREHASH", "maybe"));
-    CHECK(run("-ERR unknown DEBUG subcommand. Try HT, REHASHSTEP, ACTIVEREHASH\r\n", 3, "DEBUG", "NOPE", "x"));
-    CHECK(run("-ERR unknown DEBUG subcommand. Try HT, REHASHSTEP, ACTIVEREHASH\r\n", 5, "DEBUG", "HT", "main", "1", "2"));
+    CHECK(
+        run("-ERR steps must be between 1 and 1000000\r\n", 4, "DEBUG", "REHASHSTEP", "main", "0"));
+    CHECK(run("-ERR steps must be between 1 and 1000000\r\n", 4, "DEBUG", "REHASHSTEP", "main",
+              "1000001"));
+    CHECK(run("-ERR DEBUG REHASHSTEP target must be 'main' or 'expires'\r\n", 4, "DEBUG",
+              "REHASHSTEP", "x", "1"));
+    CHECK(run("-ERR unknown DEBUG subcommand. Try HT, REHASHSTEP, ACTIVEREHASH\r\n", 3, "DEBUG",
+              "ACTIVEREHASH", "maybe"));
+    CHECK(run("-ERR unknown DEBUG subcommand. Try HT, REHASHSTEP, ACTIVEREHASH\r\n", 3, "DEBUG",
+              "NOPE", "x"));
+    CHECK(run("-ERR unknown DEBUG subcommand. Try HT, REHASHSTEP, ACTIVEREHASH\r\n", 5, "DEBUG",
+              "HT", "main", "1", "2"));
 }
 
 int main(void)
